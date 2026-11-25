@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | :------ | :-------- |
-| 2.7.x   | Yes       |
-| < 2.7.0 | No        |
+| 2.8.x   | Yes       |
+| < 2.8.0 | No        |
 
 ## Security Model
 
@@ -16,4 +16,4 @@
 
 ## Reporting a Vulnerability
 
-Do **NOT** open a public issue. Email **tangwg089@gmail.com** with reproduction steps and affected components (Runner, Gateway, Web, or Android). Receipt is acknowledged within 48 hours.
+Do **NOT** open a public issue. Report vulnerabilities privately via [GitHub Private Vulnerability Reporting](https://github.com/xiaoran7/agenthub/security/advisories/new) with reproduction steps and affected components (Runner, Gateway, Web, or Android). Receipt is acknowledged within 48 hours.

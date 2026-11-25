@@ -1,8 +1,39 @@
-use std::fs;
+use std::{ffi::OsString, fs, sync::Mutex};
 
 use sha2::{Digest, Sha256};
 
 use super::*;
+
+static PLUGIN_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: Option<&str>) -> Self {
+        let prev = std::env::var_os(key);
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match self.prev.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 fn write_test_plugin_bundle(root: &std::path::Path, plugin_id: &str, prefix: &str) -> String {
     let dir = root.join("repo").join("plugins").join(plugin_id);
@@ -332,6 +363,9 @@ fn rejects_unsafe_runtime_commands_node_flags_env_and_svg_scripts() {
 
 #[test]
 fn rejects_remote_ssrf_and_source_url_commands() {
+    let _env_lock = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _no_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", None);
+    let _no_allowed = EnvVarGuard::set("AGENTHUB_ALLOWED_PLUGIN_REGISTRIES", None);
     assert!(installer::validate_remote_url("file:///etc/passwd", true).is_err());
     assert!(installer::validate_remote_url("http://example.com/registry.json", true).is_err());
     assert!(installer::validate_remote_url("https://127.0.0.1/registry.json", true).is_err());
@@ -455,17 +489,21 @@ fn local_install_validates_id_and_skips_symlinks_before_commit() {
 
 #[test]
 fn uppercase_registry_schemes_normalize_and_fetch_cleanly() {
+    let _env_lock = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _no_allowed = EnvVarGuard::set("AGENTHUB_ALLOWED_PLUGIN_REGISTRIES", None);
+    let _no_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", None);
+
     let dir = tempfile::tempdir().unwrap();
     let manager = PluginManager::with_dir(dir.path().join("state"));
 
     let normalized_remote = manager
         .set_remote_registry_url(Some(
-            "HTTPS://Raw.GitHubUserContent.com/org/repo/main/registry.json",
+            "HTTPS://Raw.GitHubUserContent.com/xiaoran7/agenthub-plugins/main/registry.json",
         ))
         .unwrap();
     assert_eq!(
         normalized_remote,
-        "https://raw.githubusercontent.com/org/repo/main/registry.json"
+        "https://raw.githubusercontent.com/xiaoran7/agenthub-plugins/main/registry.json"
     );
     assert!(!installer::is_local_source(&normalized_remote));
     assert!(!installer::is_local_source(
@@ -474,13 +512,13 @@ fn uppercase_registry_schemes_normalize_and_fetch_cleanly() {
     assert!(installer::is_local_source("FILE:///tmp/registry.json"));
 
     let child = installer::resolve_child_url(
-        "HTTPS://Raw.GitHubUserContent.com/org/repo/main/registry.json",
+        "HTTPS://Raw.GitHubUserContent.com/xiaoran7/agenthub-plugins/main/registry.json",
         "plugins/demo/plugin.json",
     )
     .unwrap();
     assert_eq!(
         child,
-        "https://raw.githubusercontent.com/org/repo/main/plugins/demo/plugin.json"
+        "https://raw.githubusercontent.com/xiaoran7/agenthub-plugins/main/plugins/demo/plugin.json"
     );
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -500,6 +538,7 @@ fn uppercase_registry_schemes_normalize_and_fetch_cleanly() {
         }
     });
 
+    let _allow_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", Some("1"));
     let upper_local_http = format!("HTTP://127.0.0.1:{port}/registry.json");
     let saved = manager.set_registry_url(Some(&upper_local_http)).unwrap();
     assert_eq!(saved, format!("http://127.0.0.1:{port}/registry.json"));
@@ -582,7 +621,14 @@ rl.on("line", (line) => {
     let args = vec![script_path.to_string_lossy().to_string()];
     assert!(
         crate::collectors::acp_app_server::detect_acp_gateway_kind(Path::new("node"), &args)
-            .is_some()
+            .is_none()
+    );
+    assert!(
+        crate::collectors::acp_app_server::detect_acp_gateway_kind(
+            Path::new("claude-code-acp"),
+            &[]
+        )
+        .is_some()
     );
     let mut extra = std::collections::BTreeMap::new();
     extra.insert("PLUGIN_TEST_VAR".to_string(), "ok-1".to_string());
@@ -607,5 +653,329 @@ rl.on("line", (line) => {
     assert_eq!(
         probed["hasGeminiKey"].as_str().map(str::to_string),
         parent_gemini
+    );
+}
+
+#[test]
+fn rejects_file_child_url_native_runtime_untrusted_remote_origin_and_forbidden_ips() {
+    let _env_lock = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _no_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", None);
+    let _no_allowed = EnvVarGuard::set("AGENTHUB_ALLOWED_PLUGIN_REGISTRIES", None);
+    assert_eq!(
+        installer::resolve_child_url("http://127.0.0.1:8080/registry.json", "file:///etc/passwd")
+            .unwrap_err(),
+        "forbidden_local_child_url"
+    );
+    assert_eq!(
+        installer::resolve_child_url(
+            "https://raw.githubusercontent.com/org/repo/main/registry.json",
+            "file:///etc/passwd"
+        )
+        .unwrap_err(),
+        "forbidden_local_child_url"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let plug_dir = dir.path().join("native_plug");
+    fs::create_dir_all(&plug_dir).unwrap();
+    fs::write(plug_dir.join("run.sh"), "#!/bin/sh\n").unwrap();
+    let native_spec = PluginRuntimeSpec {
+        protocol: "acp".into(),
+        command: "run.sh".into(),
+        args: vec![],
+        binary_hints: vec![],
+        env: Default::default(),
+    };
+    let err = installer::validate_runtime_spec(&native_spec, &plug_dir).unwrap_err();
+    assert_eq!(err, "forbidden_runtime_command:run.sh");
+
+    let manager = PluginManager::with_dir(dir.path().join("state"));
+    assert_eq!(
+        manager
+            .set_remote_registry_url(Some("https://evil.example/registry.json"))
+            .unwrap_err(),
+        "untrusted_remote_registry_origin"
+    );
+
+    for ip in ["0.1.2.3", "64:ff9b::127.0.0.1", "2002:7f00:0001::1"] {
+        assert!(
+            installer::is_forbidden_ip(ip.parse().unwrap()),
+            "expected forbidden ip: {ip}"
+        );
+    }
+
+    let corrupt_dir = dir.path().join("corrupt_state");
+    fs::create_dir_all(&corrupt_dir).unwrap();
+    fs::write(corrupt_dir.join("state.json"), "{broken json").unwrap();
+    let corrupt_mgr = PluginManager::with_dir(corrupt_dir.clone());
+    let write_err = corrupt_mgr.set_registry_url(None).unwrap_err();
+    assert!(write_err.contains("corrupt_plugin_state"));
+    assert_eq!(
+        fs::read_to_string(corrupt_dir.join("state.json")).unwrap(),
+        "{broken json"
+    );
+}
+
+#[test]
+fn remote_registry_trust_enforces_repo_prefix_and_revalidates_on_remote_commands() {
+    let _env_lock = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _no_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", None);
+    let _no_allowed = EnvVarGuard::set("AGENTHUB_ALLOWED_PLUGIN_REGISTRIES", None);
+
+    let official = url::Url::parse(DEFAULT_PLUGIN_REGISTRY_URL).unwrap();
+    assert!(installer::is_trusted_remote_registry_url(&official));
+
+    // Arbitrary GitHub repositories on raw.githubusercontent.com or github.com must be rejected.
+    for untrusted in [
+        "https://raw.githubusercontent.com/attacker/evil/main/registry.json",
+        "https://raw.githubusercontent.com/xiaoran7/agenthub-plugins-evil/main/registry.json",
+        "https://github.com/attacker/evil/raw/main/registry.json",
+        "https://raw.githubusercontent.com/xiaoran7/agenthub-plugins/%2e%2e/evil/registry.json",
+        "http://raw.githubusercontent.com/xiaoran7/agenthub-plugins/main/registry.json",
+    ] {
+        let parsed = url::Url::parse(untrusted).unwrap();
+        assert!(
+            !installer::is_trusted_remote_registry_url(&parsed),
+            "expected untrusted remote registry URL: {untrusted}"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let manager = PluginManager::with_dir(dir.path().join("state"));
+    assert_eq!(
+        manager
+            .set_remote_registry_url(Some(
+                "https://raw.githubusercontent.com/attacker/evil/main/registry.json",
+            ))
+            .unwrap_err(),
+        "untrusted_remote_registry_origin"
+    );
+
+    // Even if a local file or untrusted URL was configured locally, remote install and
+    // refresh_catalog must re-validate against the trusted allowlist before fetching.
+    let reg_path = write_test_plugin_bundle(dir.path(), "local_only", "locl_");
+    manager.set_registry_url(Some(&reg_path)).unwrap();
+
+    let refresh_outcome = manager.handle_remote_command(&RemotePluginCommand {
+        request_id: Some("req-refresh".into()),
+        action: "refresh_catalog".into(),
+        plugin_id: None,
+        enabled: None,
+        source_url: None,
+        registry_url: None,
+    });
+    assert!(!refresh_outcome.ok);
+    assert_eq!(
+        refresh_outcome.error.as_deref(),
+        Some("untrusted_remote_registry_origin")
+    );
+
+    let install_outcome = manager.handle_remote_command(&RemotePluginCommand {
+        request_id: Some("req-install".into()),
+        action: "install".into(),
+        plugin_id: Some("local_only".into()),
+        enabled: None,
+        source_url: None,
+        registry_url: None,
+    });
+    assert!(!install_outcome.ok);
+    assert_eq!(
+        install_outcome.error.as_deref(),
+        Some("untrusted_remote_registry_origin")
+    );
+
+    // Explicit AGENTHUB_ALLOWED_PLUGIN_REGISTRIES prefix matches exact file or children only.
+    let _allowed = EnvVarGuard::set(
+        "AGENTHUB_ALLOWED_PLUGIN_REGISTRIES",
+        Some("https://plugins.example.com/team/registry.json"),
+    );
+    assert!(installer::is_trusted_remote_registry_url(
+        &url::Url::parse("https://plugins.example.com/team/registry.json").unwrap()
+    ));
+    assert!(installer::is_trusted_remote_registry_url(
+        &url::Url::parse("https://plugins.example.com/team/plugins/zcode/adapter.mjs").unwrap()
+    ));
+    assert!(!installer::is_trusted_remote_registry_url(
+        &url::Url::parse("https://plugins.example.com/other/registry.json").unwrap()
+    ));
+    assert!(!installer::is_trusted_remote_registry_url(
+        &url::Url::parse("https://plugins.example.com/team2/registry.json").unwrap()
+    ));
+}
+
+#[test]
+fn rejects_untrusted_child_url_duplicate_paths_and_reserved_prefixes() {
+    let _env_lock = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _no_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", None);
+    let _no_allowed = EnvVarGuard::set("AGENTHUB_ALLOWED_PLUGIN_REGISTRIES", None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = PluginStore::new(dir.path().join("store"));
+
+    // Untrusted child URL inside an otherwise official registry must be rejected before download.
+    let evil_child_entry = RegistryPluginEntry {
+        id: "evil_child".into(),
+        name: "Evil".into(),
+        display_name: None,
+        version: "1.0.0".into(),
+        category: "agent".into(),
+        description: String::new(),
+        author: None,
+        license: None,
+        homepage: None,
+        min_runner_version: None,
+        session_prefix: Some("evil_".into()),
+        session_prefixes: vec![],
+        icon: None,
+        aliases: vec![],
+        capabilities: PluginCapabilities::default(),
+        runtime: None,
+        files: vec![RegistryFileEntry {
+            path: "adapter.mjs".into(),
+            url: "https://raw.githubusercontent.com/attacker/evil/main/adapter.mjs".into(),
+            sha256: "0".repeat(64),
+            size: Some(10),
+        }],
+    };
+    let err =
+        installer::stage_from_registry(&store, DEFAULT_PLUGIN_REGISTRY_URL, &evil_child_entry)
+            .unwrap_err();
+    assert!(
+        err.contains("untrusted_plugin_child_url"),
+        "expected untrusted_plugin_child_url, got: {err}"
+    );
+
+    // Duplicate rel_path must be rejected.
+    let dup_entry = RegistryPluginEntry {
+        files: vec![
+            RegistryFileEntry {
+                path: "adapter.mjs".into(),
+                url: "plugins/dup/adapter.mjs".into(),
+                sha256: "0".repeat(64),
+                size: Some(10),
+            },
+            RegistryFileEntry {
+                path: "ADAPTER.MJS".into(),
+                url: "plugins/dup/adapter.mjs".into(),
+                sha256: "0".repeat(64),
+                size: Some(10),
+            },
+        ],
+        ..evil_child_entry.clone()
+    };
+    let dup_err =
+        installer::stage_from_registry(&store, "/tmp/registry.json", &dup_entry).unwrap_err();
+    assert!(
+        dup_err.contains("duplicate_plugin_file_path"),
+        "expected duplicate_plugin_file_path, got: {dup_err}"
+    );
+
+    // Reserved or too-short session prefixes / aliases must be rejected.
+    let mut manifest = PluginManifest {
+        schema_version: 1,
+        id: "custom_agent".into(),
+        name: "Custom".into(),
+        display_name: None,
+        version: "1.0.0".into(),
+        category: "agent".into(),
+        description: String::new(),
+        author: None,
+        license: None,
+        homepage: None,
+        min_runner_version: None,
+        session_prefix: Some("a_".into()),
+        session_prefixes: vec![],
+        icon: None,
+        aliases: vec![],
+        capabilities: PluginCapabilities::default(),
+        runtime: PluginRuntimeSpec {
+            protocol: "acp".into(),
+            command: "node".into(),
+            args: vec!["adapter.mjs".into()],
+            binary_hints: vec![],
+            env: Default::default(),
+        },
+    };
+    assert!(installer::validate_manifest_identifiers(&manifest).is_err());
+    manifest.session_prefix = Some("claude_hijack_".into());
+    assert!(installer::validate_manifest_identifiers(&manifest).is_err());
+    manifest.session_prefix = Some("custom_".into());
+    manifest.aliases = vec!["codex".into()];
+    assert!(installer::validate_manifest_identifiers(&manifest).is_err());
+    manifest.aliases = vec!["custom_alias".into()];
+    assert!(installer::validate_manifest_identifiers(&manifest).is_ok());
+}
+
+#[test]
+fn blocks_extended_forbidden_ips_http_private_ssrf_and_deduplicates_corrupt_backups() {
+    let _env_lock = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _no_insecure = EnvVarGuard::set("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", None);
+
+    for ip in [
+        "192.0.0.1",
+        "198.18.0.1",
+        "198.19.255.254",
+        "240.0.0.1",
+        "::10.0.0.1",
+        "::ffff:0:127.0.0.1",
+        "2001::1",
+        "2001:db8::1",
+        "fec0::1",
+        "100::1",
+        "64:ff9b::10.0.0.1",
+        "64:ff9b:1::1",
+    ] {
+        assert!(
+            installer::is_forbidden_ip(ip.parse().unwrap()),
+            "expected extended forbidden ip: {ip}"
+        );
+    }
+
+    // Private IPs must be blocked even on http:// when require_https=false.
+    assert!(
+        installer::validate_remote_url("http://169.254.169.254/latest/meta-data", false).is_err()
+    );
+    assert!(installer::validate_remote_url("http://127.0.0.1:8080/registry.json", false).is_err());
+    assert!(installer::validate_remote_url("http://10.0.0.5/registry.json", false).is_err());
+
+    // Repeated read polls on corrupt state.json must not spam backup files, and write retries
+    // deduplicate by content hash.
+    let dir = tempfile::tempdir().unwrap();
+    let corrupt_dir = dir.path().join("corrupt_dedup");
+    fs::create_dir_all(&corrupt_dir).unwrap();
+    fs::write(corrupt_dir.join("state.json"), "{corrupt_payload").unwrap();
+    let store = PluginStore::new(corrupt_dir.clone());
+    for _ in 0..5 {
+        let _ = store.load_state();
+    }
+    let read_backups = fs::read_dir(&corrupt_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("state.corrupt.")
+        })
+        .count();
+    assert_eq!(
+        read_backups, 0,
+        "read-only load_state must not create backup files"
+    );
+
+    for _ in 0..5 {
+        assert!(store.load_state_for_write().is_err());
+    }
+    let write_backups = fs::read_dir(&corrupt_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("state.corrupt.")
+        })
+        .count();
+    assert_eq!(
+        write_backups, 1,
+        "identical corrupt state must produce only one backup"
     );
 }

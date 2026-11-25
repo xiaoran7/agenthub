@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-pub fn start_tray(_web_url: String, _running: Arc<AtomicBool>) {}
+pub fn start_tray(_web_url: String, _stopped: Arc<AtomicBool>) {}
 
 pub fn open_desktop_window(url: &str) {
     if !super::is_safe_http_url(url) {

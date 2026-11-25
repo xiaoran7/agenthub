@@ -1,7 +1,7 @@
 use std::{
+    collections::HashSet,
     fs,
     io::Read,
-    net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     thread,
     time::Duration,
@@ -9,109 +9,27 @@ use std::{
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use url::{Host, Url};
+use url::Url;
+
+#[cfg(test)]
+pub(crate) use super::security::is_forbidden_ip;
+pub use super::security::{
+    is_forbidden_plugin_env_key, is_trusted_remote_registry_url, url_matches_registry_prefix,
+    validate_manifest_identifiers, validate_remote_url, validate_runtime_spec,
+    validate_trusted_remote_registry_url,
+};
 
 use super::{
+    security::build_http_agent,
     store::PluginStore,
     types::{
         InstalledPluginRecord, MAX_PLUGIN_FILE_BYTES, MAX_REGISTRY_BYTES, PluginManifest,
-        PluginRuntimeSpec, RegistryDocument, RegistryPluginEntry, validate_plugin_id,
-        validate_relative_path,
+        RegistryDocument, RegistryPluginEntry, validate_plugin_id, validate_relative_path,
     },
 };
 
-fn build_http_agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(20)))
-        .user_agent(concat!("AgentHub-Runner/", env!("CARGO_PKG_VERSION")))
-        .http_status_as_error(false)
-        .max_redirects(0)
-        .build()
-        .new_agent()
-}
-
-fn allow_insecure_plugin_urls() -> bool {
-    std::env::var("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY")
-        .ok()
-        .is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
-}
-
-fn is_forbidden_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let oct = v4.octets();
-            let is_cgnat = oct[0] == 100 && (oct[1] & 0b1100_0000) == 64;
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || is_cgnat
-        }
-        IpAddr::V6(v6) => {
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return is_forbidden_ip(IpAddr::V4(mapped));
-            }
-            let seg0 = v6.segments()[0];
-            let is_ula = (seg0 & 0xfe00) == 0xfc00;
-            let is_link_local = (seg0 & 0xffc0) == 0xfe80;
-            v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || is_ula || is_link_local
-        }
-    }
-}
-
-pub fn validate_remote_url(raw: &str, require_https: bool) -> Result<Url, String> {
-    let trimmed = raw.trim();
-    let url = Url::parse(trimmed).map_err(|e| format!("invalid_remote_url:{e}"))?;
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err("remote_url_credentials_forbidden".into());
-    }
-    let dev_allow = allow_insecure_plugin_urls();
-    if require_https && !dev_allow {
-        if url.scheme() != "https" {
-            return Err(format!("insecure_plugin_url_scheme:{}", url.scheme()));
-        }
-    } else if !matches!(url.scheme(), "http" | "https") {
-        return Err(format!("unsupported_plugin_url_scheme:{}", url.scheme()));
-    }
-    let Some(host) = url.host() else {
-        return Err("remote_url_missing_host".into());
-    };
-    if !dev_allow {
-        match host {
-            Host::Ipv4(v4) => {
-                if is_forbidden_ip(IpAddr::V4(v4)) {
-                    return Err("forbidden_private_plugin_host".into());
-                }
-            }
-            Host::Ipv6(v6) => {
-                if is_forbidden_ip(IpAddr::V6(v6)) {
-                    return Err("forbidden_private_plugin_host".into());
-                }
-            }
-            Host::Domain(domain) => {
-                let lower = domain.trim_end_matches('.').to_ascii_lowercase();
-                if lower == "localhost"
-                    || lower.ends_with(".localhost")
-                    || lower.ends_with(".local")
-                    || lower.ends_with(".internal")
-                {
-                    return Err("forbidden_private_plugin_host".into());
-                }
-                let port = url.port_or_known_default().unwrap_or(443);
-                if let Ok(addrs) = (domain, port).to_socket_addrs() {
-                    for addr in addrs {
-                        if is_forbidden_ip(addr.ip()) {
-                            return Err("forbidden_private_plugin_ip".into());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(url)
-}
+pub const MAX_PLUGIN_FILES: usize = 256;
+pub const MAX_PLUGIN_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn has_scheme_prefix(s: &str, scheme_prefix: &str) -> bool {
     s.get(..scheme_prefix.len())
@@ -146,12 +64,21 @@ pub fn fetch_bytes_with_policy(
     max_bytes: usize,
     enforce_remote_https: bool,
 ) -> Result<Vec<u8>, String> {
+    fetch_bytes_with_policy_opts(source, max_bytes, enforce_remote_https, false)
+}
+
+fn fetch_bytes_with_policy_opts(
+    source: &str,
+    max_bytes: usize,
+    enforce_remote_https: bool,
+    enforce_remote_trust: bool,
+) -> Result<Vec<u8>, String> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return Err("empty_source_url".into());
     }
     if is_local_source(trimmed) {
-        if enforce_remote_https {
+        if enforce_remote_https || enforce_remote_trust {
             return Err("local_source_forbidden_for_remote_policy".into());
         }
         let path = file_url_to_path(trimmed)?;
@@ -166,13 +93,9 @@ pub fn fetch_bytes_with_policy(
     let agent = build_http_agent();
     let mut current = trimmed.to_string();
     for hop in 0..=5 {
-        if enforce_remote_https {
-            validate_remote_url(&current, true)?;
-        } else {
-            let parsed = Url::parse(&current).map_err(|e| format!("invalid_source_url:{e}"))?;
-            if !matches!(parsed.scheme(), "http" | "https") {
-                return Err(format!("unsupported_source_scheme:{}", parsed.scheme()));
-            }
+        let validated = validate_remote_url(&current, enforce_remote_https)?;
+        if enforce_remote_trust && !is_trusted_remote_registry_url(&validated) {
+            return Err("untrusted_remote_registry_origin".into());
         }
         let mut response = agent
             .get(&current)
@@ -214,12 +137,18 @@ pub fn fetch_bytes_with_policy(
 pub fn resolve_child_url(registry_url: &str, file_url: &str) -> Result<String, String> {
     let reg_trimmed = registry_url.trim();
     let trimmed = file_url.trim();
-    if has_scheme_prefix(trimmed, "http://")
-        || has_scheme_prefix(trimmed, "https://")
-        || has_scheme_prefix(trimmed, "file://")
-    {
-        if has_scheme_prefix(reg_trimmed, "https://") {
-            return Ok(validate_remote_url(trimmed, true)?.to_string());
+    let reg_is_http =
+        has_scheme_prefix(reg_trimmed, "http://") || has_scheme_prefix(reg_trimmed, "https://");
+    let require_https = has_scheme_prefix(reg_trimmed, "https://");
+    if has_scheme_prefix(trimmed, "file://") {
+        if reg_is_http {
+            return Err("forbidden_local_child_url".into());
+        }
+        return Ok(trimmed.to_string());
+    }
+    if has_scheme_prefix(trimmed, "http://") || has_scheme_prefix(trimmed, "https://") {
+        if reg_is_http {
+            return Ok(validate_remote_url(trimmed, require_https)?.to_string());
         }
         return Ok(trimmed.to_string());
     }
@@ -238,21 +167,35 @@ pub fn resolve_child_url(registry_url: &str, file_url: &str) -> Result<String, S
         return Ok(target.to_string_lossy().to_string());
     }
     let base = Url::parse(reg_trimmed).map_err(|e| format!("invalid_registry_url:{e}"))?;
-    let joined = base
+    let joined_url = base
         .join(trimmed)
-        .map(|u| u.to_string())
         .map_err(|e| format!("invalid_child_url:{e}"))?;
-    if has_scheme_prefix(reg_trimmed, "https://") {
-        return Ok(validate_remote_url(&joined, true)?.to_string());
+    if reg_is_http && !matches!(joined_url.scheme(), "http" | "https") {
+        return Err("forbidden_local_child_url".into());
+    }
+    let joined = joined_url.to_string();
+    if reg_is_http {
+        return Ok(validate_remote_url(&joined, require_https)?.to_string());
     }
     Ok(joined)
 }
 
 pub fn fetch_registry_document(registry_url: &str) -> Result<RegistryDocument, String> {
     let enforce_https = has_scheme_prefix(registry_url.trim(), "https://");
-    let bytes = fetch_bytes_with_policy(registry_url, MAX_REGISTRY_BYTES, enforce_https)?;
+    let bytes =
+        fetch_bytes_with_policy_opts(registry_url, MAX_REGISTRY_BYTES, enforce_https, false)?;
+    parse_registry_document(&bytes)
+}
+
+pub fn fetch_remote_registry_document(registry_url: &str) -> Result<RegistryDocument, String> {
+    validate_trusted_remote_registry_url(registry_url)?;
+    let bytes = fetch_bytes_with_policy_opts(registry_url, MAX_REGISTRY_BYTES, true, true)?;
+    parse_registry_document(&bytes)
+}
+
+fn parse_registry_document(bytes: &[u8]) -> Result<RegistryDocument, String> {
     let doc: RegistryDocument =
-        serde_json::from_slice(&bytes).map_err(|e| format!("invalid_registry_json:{e}"))?;
+        serde_json::from_slice(bytes).map_err(|e| format!("invalid_registry_json:{e}"))?;
     if doc.schema_version != 1 {
         return Err(format!(
             "unsupported_registry_schema:{}",
@@ -262,29 +205,104 @@ pub fn fetch_registry_document(registry_url: &str) -> Result<RegistryDocument, S
     Ok(doc)
 }
 
-pub fn fetch_remote_registry_document(registry_url: &str) -> Result<RegistryDocument, String> {
-    validate_remote_url(registry_url, true)?;
-    fetch_registry_document(registry_url)
-}
-
-pub fn install_from_registry(
+pub(crate) fn stage_from_registry(
     store: &PluginStore,
     registry_url: &str,
     entry: &RegistryPluginEntry,
-    enable_after: bool,
-) -> Result<InstalledPluginRecord, String> {
+) -> Result<(tempfile::TempDir, PluginManifest), String> {
+    stage_from_registry_with_policy(store, registry_url, entry, false)
+}
+
+pub(crate) fn stage_from_registry_with_policy(
+    store: &PluginStore,
+    registry_url: &str,
+    entry: &RegistryPluginEntry,
+    enforce_remote_trust: bool,
+) -> Result<(tempfile::TempDir, PluginManifest), String> {
     validate_plugin_id(&entry.id)?;
     if entry.files.is_empty() {
         return Err(format!("plugin_registry_missing_files:{}", entry.id));
     }
+    if entry.files.len() > MAX_PLUGIN_FILES {
+        return Err(format!("plugin_too_many_files:{}", entry.files.len()));
+    }
+    let parsed_reg = if enforce_remote_trust {
+        Some(validate_trusted_remote_registry_url(registry_url)?)
+    } else {
+        Url::parse(registry_url.trim()).ok()
+    };
+    let enforce_child_trust = enforce_remote_trust
+        || parsed_reg
+            .as_ref()
+            .is_some_and(|u| u.scheme() == "https" && is_trusted_remote_registry_url(u));
+
     store.ensure_dirs()?;
     let staging = tempfile::tempdir_in(store.staging_dir())
         .map_err(|e| format!("create_staging_dir_failed:{e}"))?;
 
+    let mut seen_paths: HashSet<String> = HashSet::with_capacity(entry.files.len());
+    let mut validated_files: Vec<(&crate::plugins::types::RegistryFileEntry, PathBuf)> =
+        Vec::with_capacity(entry.files.len());
+
+    // Fail-fast pass: validate all paths, duplicates, sizes, and child trust BEFORE any I/O.
     for file in &entry.files {
         let rel_path = validate_relative_path(&file.path)?;
+        let norm_key = rel_path.to_string_lossy().to_ascii_lowercase();
+        if !seen_paths.insert(norm_key) {
+            return Err(format!("duplicate_plugin_file_path:{}", file.path));
+        }
+        if let Some(expected_size) = file.size
+            && expected_size > MAX_PLUGIN_FILE_BYTES as u64
+        {
+            return Err(format!("download_exceeded_limit:{MAX_PLUGIN_FILE_BYTES}"));
+        }
+        if enforce_child_trust {
+            let raw_child = file.url.trim();
+            if has_scheme_prefix(raw_child, "file://") {
+                return Err("forbidden_local_child_url".into());
+            }
+            if super::security::has_unsafe_path_encoding(raw_child)
+                || super::security::has_raw_dot_segments(raw_child)
+            {
+                return Err(format!("untrusted_plugin_child_url:{}", file.path));
+            }
+            let pre_child = if has_scheme_prefix(raw_child, "http://")
+                || has_scheme_prefix(raw_child, "https://")
+            {
+                Url::parse(raw_child).ok()
+            } else {
+                parsed_reg.as_ref().and_then(|reg| reg.join(raw_child).ok())
+            };
+            let Some(child_url) = pre_child else {
+                return Err(format!("untrusted_plugin_child_url:{}", file.path));
+            };
+            let within_registry_prefix = parsed_reg
+                .as_ref()
+                .is_some_and(|reg| url_matches_registry_prefix(&child_url, reg));
+            if !within_registry_prefix && !is_trusted_remote_registry_url(&child_url) {
+                return Err(format!("untrusted_plugin_child_url:{}", file.path));
+            }
+        }
+        validated_files.push((file, rel_path));
+    }
+
+    let mut total_bytes: usize = 0;
+
+    for (file, rel_path) in validated_files {
         let url = resolve_child_url(registry_url, &file.url)?;
-        let bytes = fetch_bytes(&url, MAX_PLUGIN_FILE_BYTES)?;
+        let bytes = if enforce_child_trust {
+            fetch_bytes_with_policy_opts(&url, MAX_PLUGIN_FILE_BYTES, true, true)?
+        } else {
+            fetch_bytes(&url, MAX_PLUGIN_FILE_BYTES)?
+        };
+        total_bytes = total_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| format!("plugin_total_size_exceeded:{MAX_PLUGIN_TOTAL_BYTES}"))?;
+        if total_bytes > MAX_PLUGIN_TOTAL_BYTES {
+            return Err(format!(
+                "plugin_total_size_exceeded:{MAX_PLUGIN_TOTAL_BYTES}"
+            ));
+        }
         if let Some(expected_size) = file.size
             && bytes.len() as u64 != expected_size
         {
@@ -310,6 +328,16 @@ pub fn install_from_registry(
     }
 
     let manifest = validate_staged_manifest(staging.path(), Some(&entry.id))?;
+    Ok((staging, manifest))
+}
+
+pub fn install_from_registry(
+    store: &PluginStore,
+    registry_url: &str,
+    entry: &RegistryPluginEntry,
+    enable_after: bool,
+) -> Result<InstalledPluginRecord, String> {
+    let (staging, manifest) = stage_from_registry(store, registry_url, entry)?;
     commit_staged_dir(
         store,
         staging.keep(),
@@ -333,7 +361,9 @@ pub fn install_from_local_directory(
     store.ensure_dirs()?;
     let staging = tempfile::tempdir_in(store.staging_dir())
         .map_err(|e| format!("create_staging_dir_failed:{e}"))?;
-    copy_dir_safe(&dir_path, staging.path())?;
+    let mut file_count = 0usize;
+    let mut total_bytes = 0usize;
+    copy_dir_safe(&dir_path, staging.path(), &mut file_count, &mut total_bytes)?;
     let manifest = validate_staged_manifest(staging.path(), expected_id)?;
     commit_staged_dir(
         store,
@@ -344,7 +374,12 @@ pub fn install_from_local_directory(
     )
 }
 
-fn copy_dir_safe(src: &Path, dst: &Path) -> Result<(), String> {
+fn copy_dir_safe(
+    src: &Path,
+    dst: &Path,
+    file_count: &mut usize,
+    total_bytes: &mut usize,
+) -> Result<(), String> {
     let entries = fs::read_dir(src).map_err(|e| format!("read_dir_failed:{e}"))?;
     for entry in entries.flatten() {
         let Ok(ft) = entry.file_type() else {
@@ -362,93 +397,25 @@ fn copy_dir_safe(src: &Path, dst: &Path) -> Result<(), String> {
         let target = dst.join(&name);
         if ft.is_dir() {
             fs::create_dir_all(&target).map_err(|e| format!("mkdir_failed:{e}"))?;
-            copy_dir_safe(&path, &target)?;
+            copy_dir_safe(&path, &target, file_count, total_bytes)?;
         } else if ft.is_file() {
-            fs::copy(&path, &target).map_err(|e| format!("copy_failed:{e}"))?;
-        }
-    }
-    Ok(())
-}
-
-pub fn is_forbidden_plugin_env_key(key: &str) -> bool {
-    let upper = key.trim().to_ascii_uppercase();
-    matches!(
-        upper.as_str(),
-        "NODE_OPTIONS"
-            | "LD_PRELOAD"
-            | "LD_LIBRARY_PATH"
-            | "DYLD_INSERT_LIBRARIES"
-            | "DYLD_LIBRARY_PATH"
-            | "PATH"
-            | "PATHEXT"
-            | "COMSPEC"
-            | "SHELL"
-            | "IFS"
-            | "BASH_ENV"
-            | "ENV"
-            | "PYTHONSTARTUP"
-            | "PYTHONPATH"
-            | "RUBYOPT"
-            | "PERL5OPT"
-    )
-}
-
-fn is_forbidden_node_arg(arg: &str) -> bool {
-    let t = arg.trim();
-    matches!(
-        t,
-        "-e" | "--eval"
-            | "-p"
-            | "--print"
-            | "-r"
-            | "--require"
-            | "--import"
-            | "--loader"
-            | "--experimental-loader"
-            | "--experimental-vm-modules"
-    ) || t.starts_with("--eval=")
-        || t.starts_with("--print=")
-        || t.starts_with("--require=")
-        || t.starts_with("--import=")
-        || t.starts_with("--loader=")
-        || t.starts_with("--experimental-loader=")
-}
-
-pub fn validate_runtime_spec(spec: &PluginRuntimeSpec, install_dir: &Path) -> Result<(), String> {
-    if spec.protocol != "acp" {
-        return Err(format!("unsupported_plugin_protocol:{}", spec.protocol));
-    }
-    let cmd = spec.command.trim();
-    if cmd.is_empty() {
-        return Err("missing_runtime_command".into());
-    }
-    for key in spec.env.keys() {
-        if is_forbidden_plugin_env_key(key) {
-            return Err(format!("forbidden_plugin_env_key:{key}"));
-        }
-    }
-    if cmd.eq_ignore_ascii_case("node") {
-        let first_arg = spec
-            .args
-            .first()
-            .ok_or_else(|| "missing_node_entrypoint".to_string())?;
-        let lower = first_arg.trim().to_ascii_lowercase();
-        if !lower.ends_with(".mjs") && !lower.ends_with(".js") {
-            return Err(format!("invalid_node_entrypoint:{first_arg}"));
-        }
-        let rel = validate_relative_path(first_arg)?;
-        if !install_dir.join(rel).is_file() {
-            return Err(format!("missing_plugin_entrypoint:{first_arg}"));
-        }
-        for arg in &spec.args {
-            if is_forbidden_node_arg(arg) {
-                return Err(format!("forbidden_node_runtime_arg:{arg}"));
+            *file_count += 1;
+            if *file_count > MAX_PLUGIN_FILES {
+                return Err(format!("plugin_too_many_files:{MAX_PLUGIN_FILES}"));
             }
-        }
-    } else {
-        let rel = validate_relative_path(cmd)?;
-        if !install_dir.join(rel).is_file() {
-            return Err(format!("forbidden_runtime_command:{cmd}"));
+            let len = entry.metadata().map(|m| m.len() as usize).unwrap_or(0);
+            if len > MAX_PLUGIN_FILE_BYTES {
+                return Err(format!("local_file_too_large:{}", path.display()));
+            }
+            *total_bytes = total_bytes
+                .checked_add(len)
+                .ok_or_else(|| format!("plugin_total_size_exceeded:{MAX_PLUGIN_TOTAL_BYTES}"))?;
+            if *total_bytes > MAX_PLUGIN_TOTAL_BYTES {
+                return Err(format!(
+                    "plugin_total_size_exceeded:{MAX_PLUGIN_TOTAL_BYTES}"
+                ));
+            }
+            fs::copy(&path, &target).map_err(|e| format!("copy_failed:{e}"))?;
         }
     }
     Ok(())
@@ -478,11 +445,12 @@ fn validate_staged_manifest(
             manifest.id
         ));
     }
+    validate_manifest_identifiers(&manifest)?;
     validate_runtime_spec(&manifest.runtime, dir)?;
     Ok(manifest)
 }
 
-fn commit_staged_dir(
+pub(crate) fn commit_staged_dir(
     store: &PluginStore,
     staged_path: PathBuf,
     manifest: &PluginManifest,

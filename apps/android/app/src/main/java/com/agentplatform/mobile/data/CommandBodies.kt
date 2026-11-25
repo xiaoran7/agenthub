@@ -1,5 +1,6 @@
 package com.agentplatform.mobile.data
 
+import java.util.UUID
 import org.json.JSONObject
 
 // =========================================================================
@@ -121,6 +122,7 @@ data class RemoteAttachment(
     val mediaType: String,
     val data: String,
     val encoding: String,
+    val id: String = UUID.randomUUID().toString(),
 ) {
     /**
      * Guard rails the contract imposes and the picker cannot see.

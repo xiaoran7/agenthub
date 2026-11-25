@@ -205,3 +205,43 @@ fn platform_subscription_streams_versioned_cursor_events() {
     let _ = request(&endpoint, &envelope("shutdown"));
     server.join().unwrap().unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn unix_serve_rejects_symlink_or_non_directory_parent_before_bind() {
+    let dir = tempfile::tempdir().unwrap();
+    let real_dir = dir.path().join("real");
+    std::fs::create_dir(&real_dir).unwrap();
+    let sym_dir = dir.path().join("sym");
+    std::os::unix::fs::symlink(&real_dir, &sym_dir).unwrap();
+    let sock_path = sym_dir.join("agenthubd.sock");
+
+    let handler: Arc<dyn DaemonRequestHandler> = Arc::new(|_| DaemonResponse::Error {
+        code: "unexpected".into(),
+    });
+    let stopped = Arc::new(AtomicBool::new(true));
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let err = serve_with_ready(
+        sock_path.to_str().unwrap(),
+        handler.clone(),
+        stopped.clone(),
+        ready_tx,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("ipc_socket_dir_insecure"),
+        "expected ipc_socket_dir_insecure, got: {err}"
+    );
+    assert_eq!(
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Err("ipc_socket_dir_insecure".into())
+    );
+
+    let (ready_tx2, _) = mpsc::sync_channel(1);
+    let dev_null_err =
+        serve_with_ready("/dev/null/agenthubd.sock", handler, stopped, ready_tx2).unwrap_err();
+    assert!(
+        dev_null_err.to_string().contains("ipc_socket_dir_insecure"),
+        "expected ipc_socket_dir_insecure on /dev/null parent, got: {dev_null_err}"
+    );
+}

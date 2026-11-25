@@ -55,7 +55,7 @@ fn normalized_path_cache()
     })
 }
 
-/// Normalizes raw directory paths from various session formats into a clean, canonical Windows path.
+/// Normalizes raw directory paths from various session formats into a clean, canonical path.
 pub fn normalize_workspace_path(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
@@ -68,32 +68,43 @@ pub fn normalize_workspace_path(raw: &str) -> Option<String> {
         return cached.clone();
     }
 
-    // Strip UNC/extended prefixes
-    let clean = trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed);
-    let clean = clean.strip_prefix(r"\\.\").unwrap_or(clean);
+    #[cfg(windows)]
+    let normalized = {
+        // Strip UNC/extended prefixes
+        let clean = trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed);
+        let clean = clean.strip_prefix(r"\\.\").unwrap_or(clean);
 
-    let path = PathBuf::from(clean);
-    // If the path exists on disk, canonicalize it to resolve actual disk casing
-    let canonical = if let Ok(canon) = dunce::canonicalize(&path) {
-        canon
-    } else {
-        path
+        let path = PathBuf::from(clean);
+        // If the path exists on disk, canonicalize it to resolve actual disk casing
+        let canonical = dunce::canonicalize(&path).unwrap_or(path);
+
+        let s = canonical.to_string_lossy().to_string();
+        let s_clean = s.strip_prefix(r"\\?\").unwrap_or(&s);
+        let mut norm = s_clean.replace('/', "\\");
+
+        // Standardize drive letter to uppercase (e.g. "d:\" -> "D:\")
+        if norm.len() >= 2 && norm.as_bytes()[1] == b':' {
+            let first = norm.chars().next().unwrap().to_ascii_uppercase();
+            norm.replace_range(0..1, &first.to_string());
+        }
+
+        // Strip trailing slash unless it's a root drive like "C:\"
+        if norm.len() > 3 && norm.ends_with('\\') {
+            norm.pop();
+        }
+        norm
     };
 
-    let s = canonical.to_string_lossy().to_string();
-    let s_clean = s.strip_prefix(r"\\?\").unwrap_or(&s);
-    let mut normalized = s_clean.replace('/', "\\");
-
-    // Standardize drive letter to uppercase (e.g. "d:\" -> "D:\")
-    if normalized.len() >= 2 && normalized.as_bytes()[1] == b':' {
-        let first = normalized.chars().next().unwrap().to_ascii_uppercase();
-        normalized.replace_range(0..1, &first.to_string());
-    }
-
-    // Strip trailing slash unless it's a root drive like "C:\"
-    if normalized.len() > 3 && normalized.ends_with('\\') {
-        normalized.pop();
-    }
+    #[cfg(not(windows))]
+    let normalized = {
+        let path = PathBuf::from(trimmed);
+        let canonical = dunce::canonicalize(&path).unwrap_or(path);
+        let mut norm = canonical.to_string_lossy().into_owned();
+        while norm.len() > 1 && norm.ends_with('/') {
+            norm.pop();
+        }
+        norm
+    };
 
     let res = Some(normalized);
     if let Ok(mut guard) = normalized_path_cache().write() {
@@ -230,8 +241,10 @@ fn add_workspace_record(
         return;
     };
 
-    // Case-insensitive key for Windows deduplication
+    #[cfg(windows)]
     let key = norm_path.to_ascii_lowercase();
+    #[cfg(not(windows))]
+    let key = norm_path.clone();
     let entry = map.entry(key).or_insert_with(|| {
         let name = derive_workspace_name(&norm_path);
         let is_git = Path::new(&norm_path).join(".git").exists();
@@ -437,6 +450,7 @@ fn scan_codex_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
     ) else {
         return;
     };
+    let _ = conn.busy_timeout(Duration::from_millis(500));
 
     let mut stmt = match conn.prepare(
         "SELECT cwd, count(*), max(updated_at) FROM threads \
@@ -484,20 +498,30 @@ mod tests {
 
     #[test]
     fn test_normalize_workspace_path() {
-        assert_eq!(
-            normalize_workspace_path(r"D:\Claudespace\Project\agenthub"),
-            Some(r"D:\Claudespace\Project\agenthub".to_string())
-        );
-        assert_eq!(
-            normalize_workspace_path(r"\\?\D:\Claudespace\Project\agenthub\"),
-            Some(r"D:\Claudespace\Project\agenthub".to_string())
-        );
         #[cfg(windows)]
-        if Path::new(r"D:\Claudespace\Project\agenthub").exists() {
+        {
             assert_eq!(
-                normalize_workspace_path(r"d:/claudespace/project/agenthub"),
+                normalize_workspace_path(r"D:\Claudespace\Project\agenthub"),
                 Some(r"D:\Claudespace\Project\agenthub".to_string())
             );
+            assert_eq!(
+                normalize_workspace_path(r"\\?\D:\Claudespace\Project\agenthub\"),
+                Some(r"D:\Claudespace\Project\agenthub".to_string())
+            );
+            if Path::new(r"D:\Claudespace\Project\agenthub").exists() {
+                assert_eq!(
+                    normalize_workspace_path(r"d:/claudespace/project/agenthub"),
+                    Some(r"D:\Claudespace\Project\agenthub".to_string())
+                );
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(
+                normalize_workspace_path("/nonexistent/AgentHub/Project/"),
+                Some("/nonexistent/AgentHub/Project".to_string())
+            );
+            assert_eq!(normalize_workspace_path("/"), Some("/".to_string()));
         }
         assert_eq!(normalize_workspace_path("."), None);
         assert_eq!(normalize_workspace_path("   "), None);

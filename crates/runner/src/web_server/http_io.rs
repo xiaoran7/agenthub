@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) const SECURITY_HEADERS: &str = "X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: frame-ancestors 'none'; base-uri 'self'\r\n";
+pub(crate) const SECURITY_HEADERS: &str = "X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; script-src-elem 'self'; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'\r\n";
 pub(crate) const SANDBOXED_MEDIA_HEADERS: &str = "X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; sandbox\r\n";
 
 pub(crate) fn send_not_modified(stream: &mut TcpStream, etag: &str) -> anyhow::Result<()> {
@@ -152,8 +152,8 @@ pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-pub(crate) fn read_bounded_body<R: BufRead>(
-    reader: &mut R,
+pub(crate) fn read_bounded_body(
+    reader: &mut BufReader<TcpStream>,
     expected_len: usize,
     deadline: Instant,
 ) -> std::io::Result<Vec<u8>> {
@@ -164,14 +164,36 @@ pub(crate) fn read_bounded_body<R: BufRead>(
     let mut scratch = [0u8; 16 * 1024];
     let mut remaining = expected_len;
     while remaining > 0 {
-        if Instant::now() > deadline {
+        let Some(time_left) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request body deadline exceeded",
+            ));
+        };
+        if time_left.is_zero() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "request body deadline exceeded",
             ));
         }
+        let _ = reader.get_ref().set_read_timeout(Some(time_left));
         let want = remaining.min(scratch.len());
-        let n = reader.read(&mut scratch[..want])?;
+        let n = match reader.read(&mut scratch[..want]) {
+            Ok(n) => n,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "request body deadline exceeded",
+                ));
+            }
+            Err(err) => return Err(err),
+        };
         if n == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -256,28 +278,75 @@ pub(crate) const MAX_HTTP_LINE_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_HTTP_HEADERS: usize = 64;
 pub(crate) const MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Debug)]
 pub(crate) enum BoundedLine {
     Eof,
     Line(String),
     TooLong,
 }
 
-pub(crate) fn read_bounded_line<R: BufRead>(
-    reader: &mut R,
+pub(crate) fn read_bounded_line(
+    reader: &mut BufReader<TcpStream>,
     max_bytes: usize,
+    deadline: Instant,
 ) -> std::io::Result<BoundedLine> {
     let mut buf = Vec::with_capacity(256);
-    let n = reader
-        .by_ref()
-        .take((max_bytes + 1) as u64)
-        .read_until(b'\n', &mut buf)?;
-    if n == 0 {
-        return Ok(BoundedLine::Eof);
+    loop {
+        let Some(time_left) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request header deadline exceeded",
+            ));
+        };
+        if time_left.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request header deadline exceeded",
+            ));
+        }
+        let _ = reader.get_ref().set_read_timeout(Some(time_left));
+        let available = match reader.fill_buf() {
+            Ok(slice) => slice,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "request header deadline exceeded",
+                ));
+            }
+            Err(err) => return Err(err),
+        };
+        if available.is_empty() {
+            if buf.is_empty() {
+                return Ok(BoundedLine::Eof);
+            }
+            return Ok(BoundedLine::Line(
+                String::from_utf8_lossy(&buf).into_owned(),
+            ));
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            let take = pos + 1;
+            if buf.len() + take > max_bytes + 1 {
+                reader.consume(take);
+                return Ok(BoundedLine::TooLong);
+            }
+            buf.extend_from_slice(&available[..take]);
+            reader.consume(take);
+            return Ok(BoundedLine::Line(
+                String::from_utf8_lossy(&buf).into_owned(),
+            ));
+        }
+        let take = available.len();
+        if buf.len() + take > max_bytes {
+            reader.consume(take);
+            return Ok(BoundedLine::TooLong);
+        }
+        buf.extend_from_slice(available);
+        reader.consume(take);
     }
-    if buf.len() > max_bytes && !buf.ends_with(b"\n") {
-        return Ok(BoundedLine::TooLong);
-    }
-    Ok(BoundedLine::Line(
-        String::from_utf8_lossy(&buf).into_owned(),
-    ))
 }

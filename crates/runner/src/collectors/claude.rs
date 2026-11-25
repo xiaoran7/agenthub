@@ -177,7 +177,10 @@ pub(crate) fn discover_claude_config_dir() -> Result<PathBuf, CollectorError> {
 pub fn find_claude_session_info(
     session_id: &str,
 ) -> Result<Option<(PathBuf, Option<String>)>, CollectorError> {
-    let target_id = session_id.trim_start_matches("claude_");
+    let target_id = session_id.strip_prefix("claude_").unwrap_or(session_id);
+    if !validate_safe_session_id(target_id) {
+        return Ok(None);
+    }
     if let Some(cached_path) = cached_claude_session_path(target_id)
         && cached_path.is_file()
         && let Some(entry) =
@@ -325,19 +328,50 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
 pub fn find_claude_session_model(session_id: &str) -> Option<String> {
     let home = home_dir()?;
     let raw_session_id = session_id.strip_prefix("claude_").unwrap_or(session_id);
+    if !validate_safe_session_id(raw_session_id) {
+        return None;
+    }
     let path = crate::conversation::find_transcript_file(
         &home.join(".claude").join("projects"),
         raw_session_id,
         0,
     )?;
+    find_claude_session_model_in_file(&path)
+}
+
+pub(crate) fn find_claude_session_model_in_file(path: &Path) -> Option<String> {
     let file = fs::File::open(path).ok()?;
-    let reader = std::io::BufReader::new(file);
-    use std::io::BufRead;
-    for line in reader.lines().take(60).flatten() {
+    let mut reader = std::io::BufReader::new(file);
+    for _ in 0..60 {
+        let line = match read_spliced_line(&mut reader) {
+            SplicedLine::Line { text, .. } => text,
+            SplicedLine::Oversized { head, tail, .. } => {
+                let header_slice = claude_message_header_slice(&head);
+                let before_content = claude_head_before_content(&head);
+                if let Some(model) = extract_first_quoted_json_field(header_slice, "model")
+                    .filter(|m| m.trim() != "<synthetic>")
+                    .or_else(|| {
+                        extract_first_quoted_json_field(before_content, "model")
+                            .filter(|m| m.trim() != "<synthetic>")
+                    })
+                    .or_else(|| {
+                        extract_quoted_json_field(&tail, "model")
+                            .filter(|m| m.trim() != "<synthetic>")
+                    })
+                {
+                    let trimmed = model.trim();
+                    if !trimmed.is_empty() && trimmed != "<synthetic>" {
+                        return Some(trimmed.to_string());
+                    }
+                }
+                continue;
+            }
+            SplicedLine::Eof | SplicedLine::Io(_) => break,
+        };
         if let Ok(record) = serde_json::from_str::<ClaudeModelLine<'_>>(&line) {
             if let Some(model) = record.message.as_ref().and_then(|m| m.model.as_deref()) {
                 let trimmed = model.trim();
-                if !trimmed.is_empty() {
+                if !trimmed.is_empty() && trimmed != "<synthetic>" {
                     return Some(trimmed.to_string());
                 }
             }
@@ -350,14 +384,14 @@ pub fn find_claude_session_model(session_id: &str) -> Option<String> {
                 let trimmed = model.trim();
                 if !trimmed.is_empty() {
                     let cleaned = trimmed.split('[').next().unwrap_or(trimmed).trim();
-                    if !cleaned.is_empty() {
+                    if !cleaned.is_empty() && cleaned != "<synthetic>" {
                         return Some(cleaned.to_string());
                     }
                 }
             }
             if let Some(model) = record.model.as_deref() {
                 let trimmed = model.trim();
-                if !trimmed.is_empty() {
+                if !trimmed.is_empty() && trimmed != "<synthetic>" {
                     return Some(trimmed.to_string());
                 }
             }

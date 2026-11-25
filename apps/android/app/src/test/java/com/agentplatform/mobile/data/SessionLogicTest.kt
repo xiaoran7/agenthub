@@ -266,17 +266,30 @@ class SessionLogicTest {
         assertEquals(first, ledger.keyFor("r/h", "send_prompt", "body"))
 
         // The Gateway answers 400 for retryable states too (runner_offline,
-        // session_control_lost, host_generation_mismatch, approval_not_pending,
-        // runner_backpressure), so a blanket 4xx rule would let the retry run
-        // the same action twice. Only a verdict about this command is final.
+        // session_control_lost, host_generation_mismatch, runner_backpressure),
+        // so bare 400 / retryable 400 / 408 / 429 keep the key.
         ledger.forgetIfPermanent("r/h", "send_prompt", "body", 400)
+        ledger.forgetIfPermanent("r/h", "send_prompt", "body", 400, "runner_offline")
+        ledger.forgetIfPermanent("r/h", "send_prompt", "body", 400, "host_generation_mismatch")
         ledger.forgetIfPermanent("r/h", "send_prompt", "body", 408)
-        ledger.forgetIfPermanent("r/h", "send_prompt", "body", 409)
         ledger.forgetIfPermanent("r/h", "send_prompt", "body", 429)
         assertEquals(first, ledger.keyFor("r/h", "send_prompt", "body"))
 
+        // Permanent refusals (403, 409, 413, and 400 validation errors) clear the key.
         ledger.forgetIfPermanent("r/h", "send_prompt", "body", 403)
-        assertNotEquals(first, ledger.keyFor("r/h", "send_prompt", "body"))
+        val after403 = ledger.keyFor("r/h", "send_prompt", "body")
+        assertNotEquals(first, after403)
+
+        ledger.forgetIfPermanent("r/h", "send_prompt", "body", 409, "command_id_conflict")
+        val after409 = ledger.keyFor("r/h", "send_prompt", "body")
+        assertNotEquals(after403, after409)
+
+        ledger.forgetIfPermanent("r/h", "send_prompt", "body", 413, "body_too_large")
+        val after413 = ledger.keyFor("r/h", "send_prompt", "body")
+        assertNotEquals(after409, after413)
+
+        ledger.forgetIfPermanent("r/h", "send_prompt", "body", 400, "invalid_field")
+        assertNotEquals(after413, ledger.keyFor("r/h", "send_prompt", "body"))
     }
 
     @Test

@@ -85,15 +85,23 @@ class AgentGatewayTest {
         val parser = SseLineParser()
         assertNull(parser.feedLine("event: remote"))
         assertNull(parser.feedLine("id: 42"))
-        assertNull(parser.feedLine("data: " + "x".repeat(70 * 1024)))
-        assertNull(parser.feedLine(""))
+        assertNull(parser.feedLine("data: " + "x".repeat(260 * 1024)))
+        val lineOverflow = parser.feedLine("")
+        assertNotNull(lineOverflow)
+        assertEquals(true, lineOverflow?.overflowed)
+        assertEquals(42L, lineOverflow?.cursor)
+        assertNull(lineOverflow?.remoteEvent)
 
         assertNull(parser.feedLine("event: remote"))
         assertNull(parser.feedLine("id: 43"))
         repeat(5) {
             assertNull(parser.feedLine("data: " + "y".repeat(60 * 1024)))
         }
-        assertNull(parser.feedLine(""))
+        val dataOverflow = parser.feedLine("")
+        assertNotNull(dataOverflow)
+        assertEquals(true, dataOverflow?.overflowed)
+        assertEquals(43L, dataOverflow?.cursor)
+        assertNull(dataOverflow?.remoteEvent)
 
         assertNull(parser.feedLine("event: remote"))
         assertNull(parser.feedLine("id: 44"))
@@ -103,6 +111,7 @@ class AgentGatewayTest {
         assertEquals("remote", valid?.event)
         assertEquals(44L, valid?.cursor)
         assertEquals("r-1", valid?.runnerId)
+        assertEquals(false, valid?.overflowed)
         assertTrue(valid != null)
     }
 
@@ -223,6 +232,30 @@ class AgentGatewayTest {
 
         val frame = parser.feedLine("")
         assertEquals(SseFrame(event = "remote", cursor = 42L, runnerId = "runner-x"), frame)
+    }
+
+    @Test
+    fun `sse line parser decodes full remote event payloads above 4 KiB for zero-poll streaming`() {
+        val parser = SseLineParser()
+        val bigDelta = "a".repeat(6_000)
+        assertNull(parser.feedLine("id: 77"))
+        assertNull(parser.feedLine("event: remote"))
+        assertNull(
+            parser.feedLine(
+                """data: {"cursor":77,"runner_id":"runner-fast","payload":{"type":"event","event":{"hub_session_id":"hub-1","kind":"item/agentMessage/delta","raw":{"params":{"delta":"$bigDelta"}}}}}""",
+            ),
+        )
+        val frame = parser.feedLine("")
+        assertNotNull(frame)
+        assertEquals(77L, frame?.cursor)
+        assertEquals("runner-fast", frame?.runnerId)
+        assertNotNull(frame?.remoteEvent)
+        assertEquals("event", frame?.remoteEvent?.payloadType)
+        assertEquals("item/agentMessage/delta", frame?.remoteEvent?.eventKind)
+        assertEquals(
+            bigDelta,
+            frame?.remoteEvent?.event?.optJSONObject("raw")?.optJSONObject("params")?.optString("delta"),
+        )
     }
 
     @Test

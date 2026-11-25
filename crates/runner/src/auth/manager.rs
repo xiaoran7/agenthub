@@ -319,7 +319,11 @@ impl AuthManager {
                 )
             })
             .unwrap_or_default();
-        let env_tokens = tokens_from_environment(AuthProvider::Antigravity);
+        let env_tokens = if self.allow_sensitive {
+            tokens_from_environment(AuthProvider::Antigravity)
+        } else {
+            None
+        };
         let has_env_token = env_tokens
             .as_ref()
             .and_then(|t| t.access_token.as_ref())

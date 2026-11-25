@@ -121,3 +121,35 @@ fn usable_env_token_value_rejects_placeholders_and_mismatched_ccs_tokens() {
         Some("sk-live-key".to_string())
     );
 }
+
+#[test]
+fn antigravity_status_ignores_env_token_when_allow_sensitive_is_false() {
+    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.1.take() {
+                    Some(v) => std::env::set_var(self.0, v),
+                    None => std::env::remove_var(self.0),
+                }
+            }
+        }
+    }
+
+    let prev = std::env::var_os("GEMINI_API_KEY");
+    unsafe {
+        std::env::set_var("GEMINI_API_KEY", "test-sensitive-gemini-key");
+    }
+    let _guard = EnvGuard("GEMINI_API_KEY", prev);
+
+    let mut manager =
+        AuthManager::from_identity(None, None, false, "claude", "codex", Duration::from_secs(1))
+            .unwrap();
+    let snapshot = manager.status(AuthProvider::Antigravity).unwrap();
+    assert_ne!(
+        snapshot.source,
+        CredentialSource::Environment,
+        "allow_sensitive=false must not read GEMINI_API_KEY from environment"
+    );
+    assert_ne!(snapshot.auth_mode.as_deref(), Some("environment"));
+}

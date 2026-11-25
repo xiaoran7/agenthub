@@ -3,7 +3,7 @@ import type {
   AuditEvent,
   AuditMetadataValue,
   WorkspaceRole,
-} from "./accounts.js";
+} from "./account-types.js";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 

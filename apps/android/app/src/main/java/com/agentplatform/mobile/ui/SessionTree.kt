@@ -1,5 +1,6 @@
 package com.agentplatform.mobile.ui
 
+import com.agentplatform.mobile.data.AgentPlugin
 import com.agentplatform.mobile.data.DiscoveryCandidate
 import com.agentplatform.mobile.data.EngineKind
 import com.agentplatform.mobile.data.ExecutionState
@@ -79,6 +80,73 @@ fun workspaceLabel(workspaceId: String): String {
     val cleaned = raw.removePrefix("\\\\?\\").trimEnd('/', '\\')
     if (cleaned.isEmpty()) return raw
     return cleaned.substringAfterLast('/').substringAfterLast('\\').ifBlank { cleaned }
+}
+
+/**
+ * Extracts a human-readable relative/collapsed path for a workspace id,
+ * preferring the Runner's `workspace_labels` map and never exposing raw
+ * `ws-<slug>-<16hex>` hashes.
+ */
+fun workspaceDisplayPath(
+    workspaceId: String,
+    workspaceLabels: Map<String, String> = emptyMap(),
+): String? {
+    val raw = workspaceId.trim()
+    if (raw.isEmpty()) return null
+    workspaceLabels[raw]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    if (raw.startsWith("ws-")) {
+        val match = WS_TOKEN_REGEX.find(raw)
+        val slugPart = match?.groupValues?.get(1) ?: return null
+        if (slugPart.contains("___")) {
+            val parts =
+                slugPart
+                    .replace(Regex("_{3,}"), "/")
+                    .split('/')
+                    .map { it.trim('_').trim() }
+                    .filter { it.isNotEmpty() }
+            if (parts.size >= 2) {
+                return if (parts[0].length == 1 && parts[0][0].isLetter()) {
+                    "${parts[0].uppercase()}: ${parts.drop(1).joinToString("/")}"
+                } else {
+                    parts.joinToString("/")
+                }
+            }
+        }
+        return null
+    }
+    val cleaned = raw.removePrefix("\\\\?\\").replace('\\', '/').trimEnd('/')
+    return cleaned.takeIf { it.isNotEmpty() }
+}
+
+fun workspaceShortHash(workspaceId: String): String? =
+    WS_TOKEN_REGEX.find(workspaceId.trim())?.groupValues?.get(2)?.take(4)
+
+/**
+ * Formats the secondary line under a workspace name in pickers: always shows
+ * the target machine plus a human-readable path (or session count / authorized
+ * hint on older Runners), never raw `ws-...-<16hex>` gibberish.
+ */
+fun workspaceChoiceSubtitle(
+    workspaceId: String,
+    workspaceLabels: Map<String, String>,
+    deviceName: String,
+    sessionCount: Int = 0,
+    duplicated: Boolean = false,
+): String {
+    val path = workspaceDisplayPath(workspaceId, workspaceLabels)
+    val hashTag = if (duplicated) workspaceShortHash(workspaceId)?.let { "#$it" } else null
+    val parts = buildList {
+        if (deviceName.isNotBlank()) add(deviceName)
+        if (!path.isNullOrBlank()) {
+            add(path)
+        } else if (sessionCount > 0) {
+            add("$sessionCount 个历史会话")
+        } else {
+            add("已授权目录")
+        }
+        if (hashTag != null) add(hashTag)
+    }
+    return parts.joinToString(" · ")
 }
 
 /**
@@ -200,11 +268,25 @@ data class AttentionItem(
     val question: PendingQuestion?,
 )
 
+internal fun mergeHostPlugins(
+    hostPlugins: List<AgentPlugin>?,
+    controllerPlugins: List<AgentPlugin>,
+): List<AgentPlugin> {
+    if (hostPlugins.isNullOrEmpty()) return controllerPlugins
+    if (controllerPlugins.isEmpty()) return hostPlugins
+    val byId = LinkedHashMap<String, AgentPlugin>(hostPlugins.size + controllerPlugins.size)
+    for (plugin in hostPlugins) byId[plugin.id] = plugin
+    for (plugin in controllerPlugins) byId.putIfAbsent(plugin.id, plugin)
+    return byId.values.toList()
+}
+
 fun buildSessionTree(
     snapshot: Snapshot,
     providerFilter: EngineKind? = null,
+    plugins: List<AgentPlugin> = emptyList(),
 ): List<DeviceGroup> {
     val entries = mutableListOf<TreeEntry>()
+    val seenActiveKeys = HashSet<String>()
     val activeProviderKeys = HashSet<String>()
     val revoked = snapshot.hosts.filter { it.revoked }.mapTo(HashSet()) { it.runnerId }
     val hostMap = snapshot.hosts.associateBy { it.runnerId }
@@ -213,19 +295,23 @@ fun buildSessionTree(
     for (session in snapshot.sessions) {
         if (session.runnerId in revoked) continue
         val binding = session.binding
+        val activeKey = "active:${session.runnerId}/${binding.hubSessionId}"
+        if (!seenActiveKeys.add(activeKey)) continue
         val providerKey = "${session.runnerId}/${binding.providerSessionId}"
-        activeProviderKeys += providerKey
-        val discovered = discovery[providerKey]
-        val provider = engineOfSession(binding.providerSessionId, discovered?.provider)
-        if (providerFilter != null && providerFilter != provider) continue
+        if (binding.providerSessionId.isNotBlank()) activeProviderKeys += providerKey
         val host = hostMap[session.runnerId]
+        val effectivePlugins = mergeHostPlugins(host?.hello?.plugins, plugins)
+        val discovered = discovery[providerKey]
+        val reportedProvider = session.provider ?: discovered?.provider
+        val provider = engineOfSession(binding.providerSessionId, reportedProvider, effectivePlugins)
+        if (providerFilter != null && providerFilter != provider) continue
         val cleanTitle =
             sanitizeSessionTitle(binding.title)
                 .ifBlank { sanitizeSessionTitle(discovered?.title) }
                 .ifBlank { FALLBACK_TITLE }
         entries +=
             TreeEntry.Active(
-                key = providerKey,
+                key = activeKey,
                 runnerId = session.runnerId,
                 providerSessionId = binding.providerSessionId,
                 workspaceId = binding.workspacePath,
@@ -237,22 +323,25 @@ fun buildSessionTree(
                 controlConnected = binding.controlConnected,
                 executionState = binding.executionState,
                 deviceNameLabel = deviceLabel(session.runnerId, host?.hello?.deviceName),
-                agentLabel = displayEngineLabel(provider, binding.providerSessionId, discovered?.provider),
+                agentLabel = displayEngineLabel(provider, binding.providerSessionId, reportedProvider, effectivePlugins),
             )
     }
 
+    val seenCandidateKeys = HashSet<String>()
     for (host in snapshot.hosts) {
         if (host.revoked) continue
         val devName = deviceLabel(host.runnerId, host.hello?.deviceName)
+        val effectivePlugins = mergeHostPlugins(host.hello?.plugins, plugins)
         for (candidate in host.hello?.candidates.orEmpty()) {
             val providerKey = "${host.runnerId}/${candidate.providerSessionId}"
             if (providerKey in activeProviderKeys) continue
-            val provider = engineOfSession(candidate.providerSessionId, candidate.provider)
+            if (!seenCandidateKeys.add(providerKey)) continue
+            val provider = engineOfSession(candidate.providerSessionId, candidate.provider, effectivePlugins)
             if (providerFilter != null && providerFilter != provider) continue
             val cleanTitle = sanitizeSessionTitle(candidate.title).ifBlank { FALLBACK_TITLE }
             entries +=
                 TreeEntry.Candidate(
-                    key = providerKey,
+                    key = "candidate:$providerKey",
                     runnerId = host.runnerId,
                     providerSessionId = candidate.providerSessionId,
                     workspaceId = candidate.workspacePath,
@@ -264,7 +353,7 @@ fun buildSessionTree(
                     totalTokens = candidate.totalTokens,
                     deviceNameLabel = devName,
                     agentLabel =
-                        displayEngineLabel(provider, candidate.providerSessionId, candidate.provider),
+                        displayEngineLabel(provider, candidate.providerSessionId, candidate.provider, effectivePlugins),
                 )
         }
     }
@@ -370,8 +459,11 @@ fun attentionEntries(tree: List<DeviceGroup>): List<TreeEntry> =
  * pairing waiting sessions with any inline `PendingApproval` / `PendingQuestion`
  * published in `host.hello`.
  */
-fun buildAttentionQueue(snapshot: Snapshot): List<AttentionItem> {
-    val fullTree = buildSessionTree(snapshot, providerFilter = null)
+fun buildAttentionQueue(
+    snapshot: Snapshot,
+    plugins: List<AgentPlugin> = emptyList(),
+): List<AttentionItem> {
+    val fullTree = buildSessionTree(snapshot, providerFilter = null, plugins = plugins)
     val approvalsByKey = HashMap<String, PendingApproval>()
     val questionsByKey = HashMap<String, PendingQuestion>()
     for (host in snapshot.hosts) {

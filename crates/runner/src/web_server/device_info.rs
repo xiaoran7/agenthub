@@ -14,7 +14,11 @@ pub(crate) fn get_device_info(identity_path: &Path) -> serde_json::Value {
         }
     }
 
-    let Some(home) = crate::device_name::home_dir() else {
+    if crate::device_name::home_dir().is_none()
+        && identity_path
+            .parent()
+            .is_none_or(|p| p.as_os_str().is_empty())
+    {
         return json!({
             "device_id": "unknown",
             "public_key": "",
@@ -22,15 +26,11 @@ pub(crate) fn get_device_info(identity_path: &Path) -> serde_json::Value {
             "gateway_url": "",
             "device_name": crate::device_name::fallback_device_name(),
         });
-    };
+    }
 
     // The binding lives beside the identity, wherever the Runner was told to
     // keep it.
-    let agenthub_dir = identity_path
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".agenthub"));
-    let binding_path = agenthub_dir.join("binding.json");
+    let binding_path = crate::device_name::binding_path_for_identity(identity_path);
 
     let mut device_id = "unknown".to_string();
     let mut public_key = "".to_string();
@@ -89,11 +89,11 @@ pub(crate) fn get_device_info(identity_path: &Path) -> serde_json::Value {
 pub(crate) fn cached_agent_installations() -> [(bool, Option<String>); 5] {
     let home = crate::collectors::home_dir();
     [
-        find_executable(
+        crate::device_name::find_executable(
             "claude",
             &[r"AppData\Roaming\npm\claude.cmd", r".local\bin\claude"],
         ),
-        find_executable(
+        crate::device_name::find_executable(
             "codex",
             &[r"AppData\Roaming\npm\codex.cmd", r".local\bin\codex"],
         ),
@@ -101,63 +101,6 @@ pub(crate) fn cached_agent_installations() -> [(bool, Option<String>); 5] {
         crate::collectors::antigravity::check_antigravity_installed_at(home.as_deref()),
         (false, None),
     ]
-}
-
-pub(crate) fn executable_cache()
--> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {
-    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> =
-        OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-pub(crate) fn find_executable(name: &str, relative_hints: &[&str]) -> (bool, Option<String>) {
-    if let Ok(guard) = executable_cache().read() {
-        if let Some((cached_at, res)) = guard.get(name) {
-            if cached_at.elapsed() < Duration::from_secs(30) {
-                return res.clone();
-            }
-        }
-    }
-
-    let mut found = (false, None);
-    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
-        let home_path = PathBuf::from(home);
-        for hint in relative_hints {
-            let full = home_path.join(hint);
-            if full.exists() {
-                found = (true, Some(full.to_string_lossy().to_string()));
-                break;
-            }
-        }
-    }
-
-    if !found.0 {
-        if let Some(path_var) = std::env::var_os("PATH") {
-            let paths = std::env::split_paths(&path_var);
-            #[cfg(target_os = "windows")]
-            let exts = [".cmd", ".exe", ".bat", ""];
-            #[cfg(not(target_os = "windows"))]
-            let exts = [""];
-
-            for p in paths {
-                for ext in &exts {
-                    let candidate = p.join(format!("{}{}", name, ext));
-                    if candidate.is_file() {
-                        found = (true, Some(candidate.to_string_lossy().to_string()));
-                        break;
-                    }
-                }
-                if found.0 {
-                    break;
-                }
-            }
-        }
-    }
-
-    if let Ok(mut guard) = executable_cache().write() {
-        guard.insert(name.to_string(), (Instant::now(), found.clone()));
-    }
-    found
 }
 
 pub(crate) fn agent_dir_cache()

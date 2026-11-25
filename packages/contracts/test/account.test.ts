@@ -68,3 +68,13 @@ test("an avatar over the size cap is rejected", () => {
       error instanceof ContractError && error.code === "avatar_too_large",
   );
 });
+
+test("an avatar with malformed base64 throws ContractError invalid_avatar", () => {
+  for (const bad of ["data:image/png;base64,a", "data:image/png;base64,===="]) {
+    assert.throws(
+      () => parseAvatarPayload({ data_url: bad }),
+      (error: unknown) =>
+        error instanceof ContractError && error.code === "invalid_avatar",
+    );
+  }
+});

@@ -1,6 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { copyTextToClipboard } from "../lib/clipboard";
+import { splitMarkdownBlocks } from "../lib/markdown-blocks";
 
 interface MarkdownViewProps {
   content: string;
@@ -16,30 +24,24 @@ interface MarkdownViewProps {
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mountedRef = useRef(true);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
 
   const handleCopy = useCallback(async () => {
-    try {
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be denied; leaving the label unchanged is
-      // clearer than claiming a copy that did not happen.
-    }
+    const ok = await copyTextToClipboard(text);
+    if (!ok || !mountedRef.current) return;
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      if (mountedRef.current) setCopied(false);
+    }, 2000);
   }, [text]);
 
   return (
@@ -226,6 +228,22 @@ const MARKDOWN_COMPONENTS: React.ComponentProps<
  * injected into the AST, which keeps the streamed text byte-identical to what
  * the Provider sent.
  */
+const MemoizedMarkdownBlock = React.memo(function MemoizedMarkdownBlock({
+  source,
+}: {
+  source: string;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
+      urlTransform={safeMarkdownUrlTransform}
+    >
+      {source}
+    </ReactMarkdown>
+  );
+});
+
 export const MarkdownView = React.memo(function MarkdownView({
   content,
   streaming = false,
@@ -233,6 +251,9 @@ export const MarkdownView = React.memo(function MarkdownView({
 }: MarkdownViewProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [showCaret, setShowCaret] = useState(streaming);
+  // Freeze already-closed top-level Markdown blocks consistently across
+  // streaming and settled states so finishing a turn never remounts DOM nodes.
+  const blocks = useMemo(() => splitMarkdownBlocks(content), [content]);
 
   // The caret belongs to whatever block currently ends the message. Re-applying
   // it on every content change keeps it correct as blocks are appended, and
@@ -249,8 +270,8 @@ export const MarkdownView = React.memo(function MarkdownView({
     }
     // Walk to the last rendered block; if it is a code block the caret would
     // sit inside the <pre>, so fall back to after the whole body.
-    const blocks = body.children;
-    const last = blocks.item(blocks.length - 1);
+    const rendered = body.children;
+    const last = rendered.item(rendered.length - 1);
     setShowCaret(last !== null && last.tagName !== "PRE");
   }, [content, streaming]);
 
@@ -260,13 +281,13 @@ export const MarkdownView = React.memo(function MarkdownView({
       ref={bodyRef}
       data-streaming={streaming ? "true" : undefined}
     >
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        components={MARKDOWN_COMPONENTS}
-        urlTransform={safeMarkdownUrlTransform}
-      >
-        {content}
-      </ReactMarkdown>
+      {blocks.length > 0 ? (
+        blocks.map((block, idx) => (
+          <MemoizedMarkdownBlock key={idx} source={block} />
+        ))
+      ) : (
+        <MemoizedMarkdownBlock source={content} />
+      )}
       {showCaret && <Caret />}
     </div>
   );

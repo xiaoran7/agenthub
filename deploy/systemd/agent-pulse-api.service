@@ -5,14 +5,25 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/agent-pulse
+# 生产部署前请创建非特权系统账号（如 useradd -r -s /usr/sbin/nologin agentpulse），
+# 确保 /opt/agent-pulse 对该账号只读可读，/etc/agent-pulse/agent-pulse.env 权限为 0600 或 0640（属组 agentpulse）。
+# 可写状态目录由 systemd 自动创建并托管在 /var/lib/agent-pulse。
+User=agentpulse
+Group=agentpulse
+UMask=0027
+WorkingDirectory=/opt/agent-pulse/services/api
+Environment=AGENTHUB_REMOTE_DATABASE=/var/lib/agent-pulse/remote.db
 EnvironmentFile=/etc/agent-pulse/agent-pulse.env
-ExecStartPre=/usr/bin/npm run migrate --workspace @agent-pulse/api
-ExecStart=/usr/bin/npm start --workspace @agent-pulse/api
+StateDirectory=agent-pulse
+StateDirectoryMode=0750
+ExecStartPre=/opt/agent-pulse/node_modules/.bin/tsx /opt/agent-pulse/services/api/src/migrate.ts
+ExecStart=/opt/agent-pulse/node_modules/.bin/tsx /opt/agent-pulse/services/api/src/server.ts
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true
 NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

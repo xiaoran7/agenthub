@@ -1,0 +1,316 @@
+/* ---- the usage page: magpie's ledger, in the console's idiom -------------- */
+/* The page is the ledger's four readings of one period: tiles, a stacked
+   trend with its ranking beside it, a year of days, and three tables. The
+   controls at the head are magpie's (.segs, .tools); the figures below them
+   are the daemon's. Nothing here repaints on scroll: the chart is one SVG
+   the page redraws only when a figure changes, the ranking is a column of
+   short buttons, and the heatmap is a grid of static cells — no blur on any
+   list, no timer shorter than the poll's ten seconds. */
+.usage-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 12px; flex: none; }
+.usage-head .segs { align-self: center; }
+.usage-head .grow { flex: 1; min-width: 8px; }
+.usage-pane { display: flex; flex-direction: column; min-height: 0; }
+.usage-pane[hidden] { display: none; }
+.usage-note { margin: 12px 2px 2px; font-size: var(--fs-note); color: var(--muted); line-height: 1.6; }
+.usage-pane > .usage-note:first-child { margin-top: 2px; margin-bottom: 10px; }
+#usageReload.busy svg { animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { #usageReload.busy svg { animation: none; opacity: .6; } }
+
+/* the tiles carry a meter only where a figure is a share (the cache hit);
+   it sits under the sub line, thin enough not to read as a chart */
+.led-strip .blk .meter { height: 3px; margin-top: 7px; border-radius: 2px; background: var(--pill); overflow: hidden; }
+.led-strip .blk .meter i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--c3); transition: width var(--dur-4) var(--ease-spring); }
+.led-strip .v.cost { color: var(--green); }
+/* five readings, five columns: the layout pass draws the sessions strip with
+   four, and the usage page is the one that needs the fifth */
+.led-strip#usageKpi { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 640px) {
+  .led-strip#usageKpi { grid-template-columns: 1fr 1fr; }
+  .led-strip#usageKpi .blk:nth-child(odd) { border-left: 0; }
+  .led-strip#usageKpi .blk:nth-child(n + 3) { border-top: var(--rule-2); }
+  /* five readings make an odd last row: the fifth takes the whole width
+     rather than leaving half a card empty beside it */
+  .led-strip#usageKpi .blk:nth-child(5) { grid-column: 1 / -1; }
+}
+
+/* the trend: a card with its bar of picks, the chart on the left and the
+   ranking on the right — the same pair magpie's usage page draws */
+.led-trend { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px; min-height: 0; }
+.led-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; flex: none; }
+.led-bar .grow { flex: 1; min-width: 8px; }
+.led-split { display: inline-flex; align-items: center; gap: 7px; }
+.led-by { font-size: var(--fs-note); color: var(--muted); }
+.led-body { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 14px; align-items: stretch; min-height: 0; }
+.led-chart { position: relative; min-width: 0; height: 248px; }
+.led-chart .plot { position: absolute; inset: 0; }
+.led-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.led-chart .grid { stroke: var(--line-2); stroke-width: 1; shape-rendering: crispEdges; }
+.led-chart .axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.led-chart .col { transition: opacity var(--dur-2) var(--ease); }
+.led-chart .col.all { fill: var(--pill); }
+.led-chart .hot { fill: color-mix(in srgb, var(--fg) 5%, transparent); pointer-events: none; }
+.led-chart .none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: var(--fs-note); }
+.led-chart .tip {
+  position: absolute; z-index: 2; top: 4px; min-width: 150px; max-width: 240px;
+  padding: 8px 10px; border-radius: 9px; background: var(--pop-bg); color: var(--fg);
+  box-shadow: var(--shadow); font-size: var(--fs-note); pointer-events: none;
+}
+.led-chart .tip b { display: block; margin-bottom: 5px; font-weight: 600; }
+.led-chart .tip > div { display: flex; align-items: center; gap: 6px; line-height: 1.65; }
+.led-chart .tip > div > i { flex: none; width: 7px; height: 7px; border-radius: 2px; }
+.led-chart .tip > div > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+.led-chart .tip em { font-style: normal; font-variant-numeric: tabular-nums; color: var(--fg); }
+.led-chart .tip .sum { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line-2); }
+.led-chart .tip .sum span { color: var(--muted); }
+
+/* the ranking: one short button per entry, its bar in its colour; the list
+   scrolls on its own when the period has more entries than the card holds */
+.led-rank { min-width: 0; max-height: 248px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding-right: 2px; scrollbar-width: thin; }
+.rk { display: block; width: 100%; padding: 6px 7px; border-radius: 7px; text-align: left; background: none; transition: background var(--dur-2) var(--ease); }
+.rk:hover { background: var(--card-2); }
+.rk-a { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rk-sw { flex: none; width: 7px; height: 7px; border-radius: 2px; }
+.rk-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-note); font-weight: 500; color: var(--fg); }
+.rk-val { flex: none; font-size: var(--fs-note); font-variant-numeric: tabular-nums; color: var(--fg); }
+.rk-bar { height: 4px; margin: 5px 0 3px; border-radius: 2px; background: var(--pill); overflow: hidden; }
+.rk-bar i { display: block; height: 100%; border-radius: 2px; transform-origin: 0 50%; animation: share-in var(--dur-4) var(--ease-out) backwards; transition: width var(--dur-4) var(--ease-spring); }
+.rk-b { font-size: calc(var(--fs-note) - 1.5px); color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rk.plain .rk-nm { color: var(--fg-2); }
+@media (prefers-reduced-motion: reduce) { .rk-bar i { animation: none; } }
+
+/* the heatmap: 53 weeks of days, Monday first, the newest week at the right
+   edge the card opens on; the weekday names stay put while the weeks scroll */
+.led-heat { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 12px; }
+.led-heat[hidden] { display: none; }
+.heat-title { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.heat-title b { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
+.heat-title span { font-size: var(--fs-note); color: var(--muted); }
+.heat-scroll { overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; }
+.heat-grid { display: grid; grid-auto-flow: column; grid-template-rows: 16px repeat(7, 11px); grid-auto-columns: 11px; gap: 3px; width: max-content; }
+.heat-grid .wd { position: sticky; left: 0; z-index: 1; grid-column: 1; padding-right: 4px; background: var(--card); font-size: 10.5px; line-height: 11px; color: var(--muted); text-align: right; }
+.heat-grid .mo { grid-row: 1; font-size: 10.5px; line-height: 16px; color: var(--muted); white-space: nowrap; padding-left: 1px; }
+.heat-grid i { width: 11px; height: 11px; border-radius: 2.5px; background: var(--pill); transition: transform var(--dur-1) var(--ease); }
+.heat-grid i.l0 { background: var(--pill); }
+.heat-grid i.l1 { background: color-mix(in srgb, var(--accent) 26%, var(--card)); }
+.heat-grid i.l2 { background: color-mix(in srgb, var(--accent) 46%, var(--card)); }
+.heat-grid i.l3 { background: color-mix(in srgb, var(--accent) 70%, var(--card)); }
+.heat-grid i.l4 { background: var(--accent); }
+.heat-grid i:hover { transform: scale(1.35); }
+.heat-foot { display: flex; align-items: center; justify-content: flex-end; margin-top: 7px; min-height: 14px; }
+.heat-foot .sess-legend { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--muted); }
+.heat-foot .sess-legend i { width: 10px; height: 10px; border-radius: 2px; background: var(--pill); }
+.heat-foot .sess-legend i.l1 { background: color-mix(in srgb, var(--accent) 26%, var(--card)); }
+.heat-foot .sess-legend i.l2 { background: color-mix(in srgb, var(--accent) 46%, var(--card)); }
+.heat-foot .sess-legend i.l3 { background: color-mix(in srgb, var(--accent) 70%, var(--card)); }
+.heat-foot .sess-legend i.l4 { background: var(--accent); }
+.heat-tip {
+  position: absolute; z-index: 3; max-width: 280px; padding: 7px 9px; border-radius: 8px;
+  background: var(--pop-bg); color: var(--fg); box-shadow: var(--shadow); font-size: var(--fs-note);
+  pointer-events: none; white-space: nowrap;
+}
+.heat-tip b { display: block; font-weight: 600; margin-bottom: 2px; }
+.heat-tip span { color: var(--fg-2); }
+@media (prefers-reduced-motion: reduce) { .heat-grid i:hover { transform: none; } }
+
+/* the three tables: one card, the header row stuck while the list scrolls */
+.led-wrap { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: auto; max-height: calc(100vh - 210px); min-height: 0; }
+.led-wrap table.led { width: 100%; border-collapse: collapse; font-size: var(--fs-note); }
+.led-wrap thead th {
+  position: sticky; top: 0; z-index: 1; padding: 7px 10px; background: var(--card-2);
+  border-bottom: 1px solid var(--line); font-weight: 500; color: var(--muted); text-align: left; white-space: nowrap;
+}
+.led-wrap thead th.n, .led-wrap td.n { text-align: right; }
+.led-wrap tbody td { padding: 6px 10px; border-top: 1px solid var(--line-2); white-space: nowrap; }
+.led-wrap tbody tr:first-child td { border-top: 0; }
+.led-wrap tbody tr { transition: background var(--dur-1) var(--ease); }
+.led-wrap tbody tr:hover { background: color-mix(in srgb, var(--fg) 2.4%, transparent); }
+.led-wrap td.when { color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.led-wrap td.n { font-variant-numeric: tabular-nums; }
+.led-wrap td.muted { color: var(--muted); }
+.led-wrap td.model-value { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.led-wrap td.model-value img.mark { vertical-align: -3px; margin-right: 5px; }
+.led-wrap td.mono { max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+.led-wrap tr.bad td { background: color-mix(in srgb, var(--red) 5%, transparent); }
+.led-wrap tr.bad:hover td { background: color-mix(in srgb, var(--red) 9%, transparent); }
+.led-none { padding: 40px 16px; text-align: center; color: var(--muted); font-size: var(--fs-body); }
+
+/* request log subviews, column visibility picker & nested cascade filter menu */
+.led-req-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; flex: none; }
+.led-req-bar .grow { flex: 1; min-width: 8px; }
+.led-req-bar .led-search { flex: 0 1 240px; min-width: 160px; height: 30px; font-size: var(--fs-note); }
+.led-filter-picker, .led-col-picker { position: relative; display: inline-flex; }
+.led-filter-trigger.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  color: var(--accent);
+}
+.led-filter-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; line-height: 1;
+}
+.led-filter-badge[hidden] { display: none; }
+.led-pop-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  padding: 6px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--pop-bg, rgba(255, 255, 255, 0.96)); box-shadow: var(--shadow);
+  will-change: transform; transform: translateZ(0); scrollbar-width: thin;
+}
+.led-pop-menu[hidden] { display: none !important; }
+.led-cols-menu { min-width: 212px; max-height: 360px; overflow-y: auto; }
+.led-cascade-menu { width: 416px; max-width: calc(100vw - 32px); padding: 0; overflow: hidden; }
+.led-pop-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line-2);
+  font-size: calc(var(--fs-note) - 0.5px); color: var(--muted); font-weight: 600;
+}
+.led-cols-menu .led-pop-head { padding: 5px 8px 6px; margin-bottom: 3px; }
+.led-pop-head button {
+  background: none; border: 0; padding: 2px 6px; border-radius: 5px;
+  font-size: calc(var(--fs-note) - 0.5px); color: var(--accent); cursor: pointer; font-weight: 500;
+}
+.led-pop-head button:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.led-cascade-body {
+  display: grid; grid-template-columns: 152px minmax(0, 1fr); min-height: 236px; max-height: 320px;
+}
+.led-cascade-cats {
+  padding: 6px; border-right: 1px solid var(--line-2); background: color-mix(in srgb, var(--card-2) 60%, transparent);
+  display: flex; flex-direction: column; gap: 2px; overflow-y: auto;
+}
+.led-cascade-cat {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  width: 100%; padding: 7px 9px; border: 0; border-radius: 8px; background: none;
+  color: var(--fg); font-size: var(--fs-note); text-align: left; cursor: pointer;
+  transition: background var(--dur-1) var(--ease);
+}
+.led-cascade-cat:hover { background: var(--card); }
+.led-cascade-cat.on { background: var(--card); font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06); }
+.led-cascade-cat-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.led-cascade-cat-lbl { font-size: var(--fs-note); line-height: 1.25; }
+.led-cascade-cat-val {
+  font-size: calc(var(--fs-note) - 2px); color: var(--muted); font-weight: 400;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;
+}
+.led-cascade-cat.filtered .led-cascade-cat-val { color: var(--accent); font-weight: 600; }
+.led-cascade-cat svg { flex: none; color: var(--muted); width: 12px; height: 12px; }
+.led-cascade-opts {
+  padding: 6px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin;
+}
+.led-pop-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0;
+  border-radius: 7px; background: none; color: var(--fg); font-size: var(--fs-note);
+  text-align: left; cursor: pointer; transition: background var(--dur-1) var(--ease);
+}
+.led-pop-item:hover { background: var(--card-2); }
+.led-pop-item.on { background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--fg); font-weight: 600; }
+.led-pop-chk {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line);
+  background: var(--card); color: transparent; font-size: 11px; line-height: 1;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.led-pop-item.on .led-pop-chk { background: var(--accent); border-color: var(--accent); color: #fff; }
+.led-pop-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.led-pop-cnt { flex: none; font-size: calc(var(--fs-note) - 1.5px); color: var(--muted); font-variant-numeric: tabular-nums; }
+.led-active-chips {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; flex: none;
+}
+.led-active-chips[hidden] { display: none; }
+.led-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--card)); color: var(--fg);
+  font-size: calc(var(--fs-note) - 1px); cursor: pointer;
+}
+.led-chip b { color: var(--muted); font-weight: 500; }
+.led-chip span { font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.led-chip i { font-style: normal; color: var(--muted); font-size: 13px; line-height: 1; }
+.led-chip:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--card)); }
+.led-chip-reset {
+  border: 0; background: none; color: var(--accent); font-size: calc(var(--fs-note) - 1px);
+  font-weight: 500; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.led-chip-reset:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.led-export-notice {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 11px; margin-bottom: 8px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, var(--card)); font-size: var(--fs-note);
+}
+.led-export-notice[hidden] { display: none; }
+.led-export-notice .path {
+  font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--fg);
+  word-break: break-all; flex: 1; min-width: 180px;
+}
+.led-more-bar {
+  display: flex; align-items: center; justify-content: center; padding: 10px 12px;
+  border-top: 1px solid var(--line-2); background: var(--card-2);
+}
+.led-prov-pill {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
+  background: var(--pill); color: var(--fg-2); font-size: calc(var(--fs-note) - 1px); font-weight: 500;
+}
+#usageContext.led-wrap { padding: 4px 0; }
+.ctx-row .who { flex: 1 1 auto; min-width: 0; }
+.ctx-row .name-line .name { font-family: var(--code); font-size: var(--fs-note); }
+.ctx-row .ic { width: 18px; height: 18px; }
+.ctx-row .share { flex: 1 1 auto; }
+.ctx-row .num { min-width: 72px; }
+.ctx-row .ctx-when { flex: none; min-width: 44px; text-align: right; font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* the vendor marks: one size, never stretched. A mark magpie draws in
+   currentColor paints black as an <img>, so the dark theme inverts it; a
+   model the family table does not know gets an empty plate rather than an
+   invented logo */
+img.mark { flex: none; display: inline-block; vertical-align: -3px; object-fit: contain; border-radius: 3px; }
+html.dark img.mark.mono { filter: invert(1); }
+.mark.none { display: inline-block; flex: none; vertical-align: -3px; border-radius: 3px; background: var(--pill); }
+.model-value img.mark, .ctx-row img.mark { margin-right: 1px; }
+
+@media (max-width: 860px) {
+  .led-body { grid-template-columns: minmax(0, 1fr); }
+  .led-rank { max-height: 210px; }
+  .led-wrap { max-height: none; }
+}
+
+/* ---- the reduced-motion contract, in one place --------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .view, .view.active > *, .toast, .modal, .modal .dialog, .row, .row.stat .share i,
+  .text, .text.action, .icon, .icon svg, .group-body, .group-body > .group-rows > .row,
+  .inp, .led-strip .blk, .kpi, #nav button[data-view], #nav button[data-view] > span,
+  #nav .rail-hl, .seg > .thumb, #navTopSlot > .thumb { transition: none !important; }
+  .view.active > *, .row.stat .share i, .editor .ok-box { animation: none !important; }
+  .row:hover, .led-strip .blk.clickable:hover { transform: none !important; }
+}
+
+/* ---- the theme changes as one cross-fade --------------------------------- */
+/* A switch repaints every surface at once; without help that reads as a
+   flash. For the length of the switch only, every element is given the same
+   colour transition, so the page fades from one theme into the other as one
+   sheet — then the rule is gone again, and hover states keep their own
+   timings. This is deliberately not a view transition: Chromium drops the
+   root snapshot as soon as the page column carries a name of its own
+   (switchView's `page`), so the fade is done with plain CSS.
+   `:where()` keeps the selectors at zero specificity, so the rule never has
+   to out-rank anything — it only has to be the one that declares the
+   transition while the class is on. */
+html.theme-fade,
+html.theme-fade :where(*),
+html.theme-fade :where(*)::before,
+html.theme-fade :where(*)::after {
+  transition-property: background-color, color, border-color, box-shadow, fill, stroke !important;
+  transition-duration: .42s !important;
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html.theme-fade, html.theme-fade :where(*), html.theme-fade :where(*)::before, html.theme-fade :where(*)::after { transition: none !important; }
+}
+
+/* ---- plugins tab inside settings ----------------------------------------- */
+.plugin-reg-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: 100%; }
+.plugin-reg-controls .inp { min-width: 280px; flex: 1; font-family: var(--code); font-size: var(--fs-note); }
+.plugin-actions { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.plugin-caps { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: 6px; }
+@media (max-width: 720px) {
+  .plugin-reg-controls .inp { min-width: 180px; width: 100%; }
+}

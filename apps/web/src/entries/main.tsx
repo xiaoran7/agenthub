@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import PanelPage from "../pages/PanelPage";
 import { initPwaInstallMonitor } from "../lib/pwa-install";
 import { initThemeListener } from "../lib/theme";
@@ -16,6 +17,8 @@ if (container === null) {
 
 createRoot(container).render(
   <StrictMode>
-    <PanelPage />
+    <ErrorBoundary scope="page">
+      <PanelPage />
+    </ErrorBoundary>
   </StrictMode>,
 );

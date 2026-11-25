@@ -21,9 +21,12 @@
 
 - **Codex 历史和控制**：Gateway 仅向在握手声明 `codex_session_control` 的 Runner 派发新版控制指令。`connect/preview` 使用 `thread/read` 校验原生会话和工作区，再读取本机已保存的历史。`connect/take_control` 和明确包含 `acquire_control: true` 的 `send_prompt` 才能恢复原生写入控制。Runner 重启时把历史绑定恢复为断开。`release_control` 或借用会话空闲后调用 `thread/unsubscribe`，会话在收到 `thread/closed` 或确认原生会话已卸载前为 `releasing_control`。执行中的回合、审批及提问会阻止归还。
 
-## 5. 事件投影与增量收敛
-- **白名单事件**：`session_bound`、`session_control_changed`、`execution_state_changed`、`turn_started`、`turn_completed`、`message_delta`、`message_completed`、`tool_started`、`tool_completed`、`approval_requested`、`approval_resolved`、`provider_error`。
-- **收敛规则**：`message_delta` 按 `turn/item/block` 聚合，`item/completed` 原位覆盖流式增量；`settledConversationItems` 按已落盘用户消息绝对行数阈值退避乐观气泡，防重复文本误消或超时连坐清空。
+## 5. 事件投影、零轮询 SSE 直消费与桌面实时镜像
+- **白名单事件**：`session_bound`、`session_control_changed`、`execution_state_changed`、`turn_started`、`turn_completed`、`message_delta`、`message_completed`、`tool_started`、`tool_completed`、`approval_requested`、`approval_resolved`、`provider_error`、`history/snapshot`。
+- **零轮询 SSE 直消费**：Gateway `/v3/remote/stream` 的 `event: remote` 帧已携带完整 `RemoteEvent` JSON（`cursor`、`runner_id`、`payload`）。Web（`remote-sse-sync.ts` + `requestAnimationFrame` 帧合并）与 Android（`SseLineParser` + `SessionSyncSignal`）在会话首屏完成后直接消费流式事件并原地更新会话 `binding`，省去每帧 2 次串行 HTTP GET；仅在收到 `receipt`、`ready`、`turn/completed`、未解析帧或游标断层时触发 HTTP 补偿校验。
+- **Runner 低延迟出站与优先级车道**：`outbound_lanes.rs` 在严格保持 `Data` 帧连续单调 `seq` 的前提下，优先发送并合并 `Ack` 与 `Control` 帧；`network_loop.rs` 采用自适应读超时（活跃期 `4ms` / 空闲期 `20ms`），`remote_runner.rs` 改用 `events.recv_timeout(...)` 事件唤醒，消除固定 50ms 读阻塞与轮询睡眠。
+- **桌面原生会话零抢锁实时镜像**：`live_mirror.rs` 通过 `load_session_conversation_if_changed` 对已绑定但当前无 Runner 独占回合的本地会话（含 Codex `Preview` 及共享桌面 Claude Code / Antigravity / 插件会话）做 `O(1)` 文件元数据变更检测（活跃期 `350ms` / 平稳期 `1000ms`），在桌面原生客户端写入新消息时免 `TakeControl` 实时推送 `history/snapshot` 与 `thread/tokenUsage/updated`。
+- **收敛与 60 FPS 渲染**：`message_delta` 按 `turn/item/block` 聚合，`item/completed` 原位覆盖流式增量；Web `MarkdownView` 结合 `markdown-blocks.ts` 在流式阶段对已闭合 Markdown 块做 `React.memo` 冻结，仅重解析末尾活跃块；`settledConversationItems` 按已落盘用户消息绝对行数阈值退避乐观气泡，防重复文本误消或超时连坐清空。
 
 ## 6. Runner 权威插件状态同步 (Plugin Sync v2)
 - **权威来源与持久化**：Runner 在 `ready.plugins` 上报本机已发现/已安装插件快照与 `registry_url`；Gateway 在 SQLite `RemoteContentStore` 的 `remote_runner_plugins` 表持久化（PostgreSQL 主库由迁移 `0018_dynamic_plugin_agent_types.sql` 放开 `agent_type` 校验），不保留写死默认列表。

@@ -2,6 +2,7 @@ package com.agentplatform.mobile.data
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.nio.charset.StandardCharsets
@@ -15,6 +16,32 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import org.json.JSONObject
 
+internal fun isRecoverableKeyFailure(failure: Throwable): Boolean =
+    failure is KeyPermanentlyInvalidatedException ||
+        failure is InvalidKeyException ||
+        failure is UnrecoverableKeyException
+
+internal fun shouldResetKeyOnLoadFailure(failure: Throwable): Boolean =
+    failure is InvalidKeyException || failure is UnrecoverableKeyException
+
+internal fun shouldClearBlobOnLoadFailure(failure: Throwable): Boolean =
+    failure is AEADBadTagException || shouldResetKeyOnLoadFailure(failure)
+
+internal fun <T> encryptWithSingleKeyReset(
+    resetKey: () -> Unit,
+    encrypt: () -> T,
+): T =
+    try {
+        encrypt()
+    } catch (failure: Exception) {
+        if (isRecoverableKeyFailure(failure)) {
+            resetKey()
+            encrypt()
+        } else {
+            throw failure
+        }
+    }
+
 /**
  * Keeps the deployment credential encrypted with a non-exportable Android
  * Keystore key. Nothing is written to logs or backups.
@@ -27,6 +54,7 @@ class SecureConfigStore(context: Context) {
     private val preferences =
         context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
 
+    @Synchronized
     fun load(): AppConfig? {
         val iv = preferences.getString(KEY_IV, null) ?: return null
         val ciphertext = preferences.getString(KEY_CIPHERTEXT, null) ?: return null
@@ -46,26 +74,26 @@ class SecureConfigStore(context: Context) {
                     )
                 AppConfig(
                     gatewayBase = json.getString("gateway_base"),
-                    accessToken = json.optString("access_token"),
-                    developmentUserId = json.optString("development_user_id"),
-                    sessionCookie = json.optString("session_cookie"),
+                    accessToken = json.optNullableString("access_token").orEmpty(),
+                    developmentUserId = json.optNullableString("development_user_id").orEmpty(),
+                    sessionCookie = json.optNullableString("session_cookie").orEmpty(),
                 )
             }
             .getOrElse { failure ->
                 // Only clear stored credentials when the Keystore key or cipher
                 // blob is permanently unrecoverable. Transient binder/IPC errors
                 // must leave config intact so the next launch recovers cleanly.
-                if (
-                    failure is AEADBadTagException ||
-                    failure is InvalidKeyException ||
-                    failure is UnrecoverableKeyException
-                ) {
+                if (shouldClearBlobOnLoadFailure(failure)) {
                     clear()
+                }
+                if (shouldResetKeyOnLoadFailure(failure)) {
+                    resetKey()
                 }
                 null
             }
     }
 
+    @Synchronized
     fun save(config: AppConfig) {
         val normalized = config.normalized()
         check(normalized.validationError() == null) { "invalid app configuration" }
@@ -77,18 +105,29 @@ class SecureConfigStore(context: Context) {
                 .put("session_cookie", normalized.sessionCookie)
                 .toString()
                 .toByteArray(StandardCharsets.UTF_8)
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
-        val ciphertext = cipher.doFinal(plaintext)
+        val (iv, ciphertext) =
+            encryptWithSingleKeyReset(resetKey = ::resetKey) {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+                cipher.iv to cipher.doFinal(plaintext)
+            }
         preferences
             .edit()
-            .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
             .putString(KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
             .apply()
     }
 
+    @Synchronized
     fun clear() {
         preferences.edit().clear().apply()
+    }
+
+    private fun resetKey() {
+        runCatching {
+            val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
+            keyStore.deleteEntry(KEY_ALIAS)
+        }
     }
 
     private fun getOrCreateKey(): SecretKey {

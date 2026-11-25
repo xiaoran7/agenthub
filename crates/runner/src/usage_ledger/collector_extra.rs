@@ -51,7 +51,7 @@ pub(crate) fn update_extra_client_calls(home: &Path, routed: &HashMap<String, St
     guard
         .other_files
         .retain(|p, _| mark_set.contains(p.as_path()));
-    guard.remove_missing_cold_paths("other", &mark_set);
+    any_changed |= guard.remove_missing_cold_paths("other", &mark_set);
 
     for (path, kind, mark) in file_marks {
         if let Some((old_mark, _)) = guard.other_files.get(&path) {

@@ -154,6 +154,7 @@ impl RemoteJournal {
             [],
         )?;
         transaction.execute("UPDATE remote_inbound SET received=0 WHERE singleton=1", [])?;
+        transaction.execute("DELETE FROM remote_inbound_commands", [])?;
         transaction.commit()?;
         reclaim_freelist_if_needed(
             &self.connection,
@@ -291,6 +292,14 @@ impl RemoteJournal {
         if seq <= sent {
             return Ok(());
         }
+        let max_outbox_seq: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM remote_outbox",
+            [],
+            |row| row.get(0),
+        )?;
+        if seq > max_outbox_seq {
+            return Err(JournalError::InvalidAck);
+        }
         let expected = seq - sent;
         let present: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM remote_outbox WHERE seq>?1 AND seq<=?2",
@@ -306,6 +315,12 @@ impl RemoteJournal {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Reconciles `sent` up to `server_seq` on reconnect after validating in O(1)
+    /// that `server_seq <= MAX(seq)` in `remote_outbox`.
+    pub fn reconcile_sent_through(&mut self, server_seq: i64) -> Result<()> {
+        self.mark_sent_through(server_seq)
     }
 
     pub fn acknowledge(&mut self, seq: i64) -> Result<()> {
@@ -332,6 +347,9 @@ impl RemoteJournal {
     }
 
     pub fn reset_watermarks_and_outbox(&mut self, server_seq: i64) -> Result<()> {
+        if server_seq < 0 {
+            return Err(JournalError::InvalidAck);
+        }
         let transaction = self.connection.transaction()?;
         transaction.execute("DELETE FROM remote_outbox", [])?;
         transaction.execute("DELETE FROM sqlite_sequence WHERE name='remote_outbox'", [])?;
@@ -362,6 +380,9 @@ impl RemoteJournal {
     /// journal that no longer exists, so keeping their rows would only make the
     /// next command at those sequences look like a conflict.
     pub fn reset_inbound_command_seq(&mut self, seq: i64) -> Result<()> {
+        if seq < 0 {
+            return Err(JournalError::InvalidAck);
+        }
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "UPDATE remote_inbound SET received=?1 WHERE singleton=1",

@@ -11,7 +11,9 @@ services:
     env_file:
       - ./docker.env
     volumes:
-      - /opt/1panel/apps/agent-pulse/data:/opt/data
+      # 默认使用命名卷持久化 SQLite Remote 数据，容器首次启动会自动继承 node (UID 1000) 属主权限。
+      # 若改为宿主机绑定目录（如 /srv/agenthub/data:/opt/data），请先创建目录并执行 chown -R 1000:1000。
+      - agenthub_prod_data:/opt/data
     environment:
       NODE_ENV: production
       HOST: 127.0.0.1
@@ -29,7 +31,12 @@ services:
       # 不会被 envsubst 替换，nginx 会因未知变量直接启动失败。
       GATEWAY_ACCESS_TOKEN: ""
       GATEWAY_ORIGIN: http://127.0.0.1:3101
+      # host 网络下必须显式绑定回环地址，防止 3100 端口绕过外层 TLS 反代直接暴露公网。
+      WEB_HOST: 127.0.0.1
       WEB_PORT: 3100
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
+
+volumes:
+  agenthub_prod_data:

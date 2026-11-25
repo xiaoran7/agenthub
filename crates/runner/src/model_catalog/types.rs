@@ -28,8 +28,10 @@ pub struct DiskModelCache {
     pub schema_version: u32,
 }
 
-pub(crate) fn memory_cache() -> &'static RwLock<Option<(Instant, Vec<LiveCatalogModel>)>> {
-    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<LiveCatalogModel>)>>> = OnceLock::new();
+pub(crate) fn memory_cache()
+-> &'static RwLock<Option<(Instant, Option<String>, Vec<LiveCatalogModel>)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, Option<String>, Vec<LiveCatalogModel>)>>> =
+        OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(None))
 }
 

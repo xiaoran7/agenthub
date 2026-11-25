@@ -28,6 +28,7 @@ FROM nginx:1.29-alpine
 # runtime variables ($host, $http_cookie, ...) are never mistaken for
 # environment placeholders and blanked out.
 ENV ENVSUBST_FILTER=^(GATEWAY_|WEB_)
+ENV WEB_HOST=0.0.0.0
 ENV WEB_PORT=3100
 ENV WEB_ROOT=/usr/share/nginx/html
 ENV GATEWAY_ORIGIN=http://127.0.0.1:3101

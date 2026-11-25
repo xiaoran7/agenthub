@@ -50,7 +50,7 @@ impl MultiProviderTransport {
                 let raw_id = server
                     .session_new_with_options(&cwd_path, model, permission_mode)
                     .map_err(|err| {
-                        NativeError::uncertain(format!("plugin_session_new_failed:{err}"))
+                        NativeError::rejected(format!("plugin_session_new_failed:{err}"))
                     })?;
 
                 let session_id = if raw_id.starts_with(&prefix) {
@@ -74,6 +74,26 @@ impl MultiProviderTransport {
                 }))
             }
             "thread/read" => {
+                let raw_id = session_id_param
+                    .strip_prefix(&prefix)
+                    .unwrap_or(session_id_param);
+                if raw_id.is_empty() {
+                    return Err(NativeError::rejected("native_session_not_found"));
+                }
+                let in_memory = self.acp_servers.contains_key(session_id_param)
+                    || self.acp_active_turns.contains_key(session_id_param)
+                    || self.acp_cached_cwds.contains_key(session_id_param);
+                if !in_memory {
+                    let discovered_cwd =
+                        self.find_discovered_plugin_session_cwd(&rec, session_id_param, raw_id);
+                    let Some(cwd_opt) = discovered_cwd else {
+                        return Err(NativeError::rejected("native_session_not_found"));
+                    };
+                    if let Some(discovered) = cwd_opt {
+                        self.acp_cached_cwds
+                            .insert(session_id_param.to_string(), discovered);
+                    }
+                }
                 let cwd = self.resolve_plugin_cwd(session_id_param, &params);
                 self.acp_cached_cwds
                     .insert(session_id_param.to_string(), cwd.clone());
@@ -89,12 +109,16 @@ impl MultiProviderTransport {
                 }))
             }
             "thread/resume" => {
-                let cwd = self.resolve_plugin_cwd(session_id_param, &params);
-                self.acp_cached_cwds
-                    .insert(session_id_param.to_string(), cwd.clone());
+                if !rec.manifest.capabilities.resume {
+                    return Err(NativeError::rejected("plugin_resume_unsupported"));
+                }
                 let raw_id = session_id_param
                     .strip_prefix(&prefix)
                     .unwrap_or(session_id_param);
+                if raw_id.is_empty() {
+                    return Err(NativeError::rejected("native_session_not_found"));
+                }
+                let cwd = self.resolve_plugin_cwd(session_id_param, &params);
                 if !self.acp_servers.contains_key(session_id_param) {
                     let (_, mut server) = crate::plugins::global_manager()
                         .spawn_acp_server(&rec.id, Duration::from_secs(20))
@@ -106,13 +130,15 @@ impl MultiProviderTransport {
                     server
                         .session_load_with_cwd(raw_id, cwd_opt)
                         .map_err(|err| {
-                            NativeError::uncertain(format!("plugin_resume_failed:{err}"))
+                            NativeError::rejected(format!("plugin_resume_failed:{err}"))
                         })?;
                     self.acp_session_plugins
                         .insert(session_id_param.to_string(), rec.id.clone());
                     self.acp_servers
                         .insert(session_id_param.to_string(), server);
                 }
+                self.acp_cached_cwds
+                    .insert(session_id_param.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id_param,
@@ -139,7 +165,7 @@ impl MultiProviderTransport {
                     server
                         .session_load_with_cwd(raw_id, cwd_opt)
                         .map_err(|err| {
-                            NativeError::uncertain(format!("plugin_resume_failed:{err}"))
+                            NativeError::rejected(format!("plugin_resume_failed:{err}"))
                         })?;
                     self.acp_session_plugins
                         .insert(session_id_param.to_string(), rec.id.clone());
@@ -162,24 +188,29 @@ impl MultiProviderTransport {
                     .map(str::trim)
                     .filter(|s| !s.is_empty());
                 let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
-                self.acp_active_turns
-                    .insert(session_id_param.to_string(), turn_id.clone());
 
-                let server = self
-                    .acp_servers
-                    .get_mut(session_id_param)
-                    .ok_or_else(|| NativeError::rejected("plugin_session_not_found"))?;
-
-                server
-                    .send_tracked_prompt_with_options(
+                let send_res = {
+                    let server = self
+                        .acp_servers
+                        .get_mut(session_id_param)
+                        .ok_or_else(|| NativeError::rejected("plugin_session_not_found"))?;
+                    server.send_tracked_prompt_with_options(
                         raw_id,
                         text,
                         &turn_id,
                         model,
                         permission_mode,
                     )
-                    .map_err(|err| NativeError::uncertain(format!("plugin_send_failed:{err}")))?;
+                };
+                if let Err(err) = send_res {
+                    self.acp_servers.remove(session_id_param);
+                    self.acp_session_plugins.remove(session_id_param);
+                    self.acp_active_turns.remove(session_id_param);
+                    return Err(NativeError::rejected(format!("plugin_send_failed:{err}")));
+                }
 
+                self.acp_active_turns
+                    .insert(session_id_param.to_string(), turn_id.clone());
                 self.acp_buffered_events.push_back(json!({
                     "method": "turn/started",
                     "params": {
@@ -202,10 +233,16 @@ impl MultiProviderTransport {
                 let raw_id = session_id_param
                     .strip_prefix(&prefix)
                     .unwrap_or(session_id_param);
-                if let Some(server) = self.acp_servers.get_mut(session_id_param) {
+                let has_server = if let Some(server) = self.acp_servers.get_mut(session_id_param) {
                     let _ = server.session_cancel(raw_id);
+                    true
+                } else {
+                    false
+                };
+                // Keep active turn_id until `turn/completed` drains so NativeSessionHost matches turn.id.
+                if !has_server {
+                    self.acp_active_turns.remove(session_id_param);
                 }
-                self.acp_active_turns.remove(session_id_param);
                 Ok(json!({ "ok": true }))
             }
             "thread/archive" | "thread/unarchive" => Ok(json!({ "ok": true })),
@@ -213,6 +250,44 @@ impl MultiProviderTransport {
                 "unsupported_plugin_method:{method}"
             ))),
         }
+    }
+
+    fn find_discovered_plugin_session_cwd(
+        &self,
+        rec: &crate::plugins::InstalledPluginRecord,
+        session_id: &str,
+        raw_id: &str,
+    ) -> Option<Option<PathBuf>> {
+        let match_item = |item: &Value| -> Option<Option<PathBuf>> {
+            let id = item.get("id").and_then(Value::as_str)?;
+            if id != session_id && id != raw_id {
+                return None;
+            }
+            let cwd = item
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != ".")
+                .map(|s| {
+                    let p = PathBuf::from(s);
+                    dunce::canonicalize(&p).unwrap_or(p)
+                });
+            Some(cwd)
+        };
+        for item in cached_local_store_sessions().iter() {
+            if let Some(found) = match_item(item) {
+                return Some(found);
+            }
+        }
+        if rec.manifest.capabilities.discover {
+            let meta = crate::plugins::global_manager().query_metadata_for(rec);
+            for item in &meta.sessions {
+                if let Some(found) = match_item(item) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 
     fn resolve_plugin_cwd(&self, session_id: &str, params: &Value) -> PathBuf {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { useDialogFocus } from "../lib/dialog-focus";
@@ -39,20 +39,26 @@ export function Confirm({
   onConfirm,
   onCancel,
 }: ConfirmProps) {
+  const dialogId = useId();
+  const titleId = `${dialogId}-title`;
+  const descId = `${dialogId}-desc`;
   const cancelRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(open, dialogRef, { initialFocusRef: cancelRef });
 
-  // Escape always means "no".
+  // Escape always means "no", and must never bubble out to close an underlying
+  // surface even while an irreversible action is in flight.
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || busy) return;
+      if (event.key !== "Escape") return;
       event.preventDefault();
-      onCancel();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (!busy) onCancel();
     };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [open, busy, onCancel]);
 
   if (!open) return null;
@@ -69,16 +75,14 @@ export function Confirm({
         className="cds-confirm"
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="cds-confirm-title"
-        aria-describedby={
-          description !== undefined ? "cds-confirm-desc" : undefined
-        }
+        aria-labelledby={titleId}
+        aria-describedby={description !== undefined ? descId : undefined}
       >
-        <h2 className="cds-confirm-title" id="cds-confirm-title">
+        <h2 className="cds-confirm-title" id={titleId}>
           {title}
         </h2>
         {description !== undefined && (
-          <p className="cds-confirm-desc" id="cds-confirm-desc">
+          <p className="cds-confirm-desc" id={descId}>
             {description}
           </p>
         )}

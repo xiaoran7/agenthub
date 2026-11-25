@@ -297,6 +297,7 @@ fun OrcaPrimaryButton(
     label: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    fillWidth: Boolean = true,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -307,7 +308,9 @@ fun OrcaPrimaryButton(
         color = if (enabled) OrcaColors.surfaceBright else OrcaColors.bgRaised,
     ) {
         Box(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.md),
+            modifier =
+                (if (fillWidth) Modifier.fillMaxWidth() else Modifier)
+                    .padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.md),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -329,6 +332,7 @@ fun OrcaSecondaryButton(
     label: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    fillWidth: Boolean = true,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -340,7 +344,9 @@ fun OrcaSecondaryButton(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Box(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.md),
+            modifier =
+                (if (fillWidth) Modifier.fillMaxWidth() else Modifier)
+                    .padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.md),
             contentAlignment = Alignment.Center,
         ) {
             Text(

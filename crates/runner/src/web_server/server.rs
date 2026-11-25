@@ -133,9 +133,9 @@ pub(crate) fn handle_connection(
     let header_deadline = Instant::now() + Duration::from_secs(10);
 
     let mut reader = BufReader::new(stream.try_clone()?);
-    let request_line = match read_bounded_line(&mut reader, MAX_HTTP_LINE_BYTES)? {
-        BoundedLine::Eof => return Ok(()),
-        BoundedLine::TooLong => {
+    let request_line = match read_bounded_line(&mut reader, MAX_HTTP_LINE_BYTES, header_deadline) {
+        Ok(BoundedLine::Eof) => return Ok(()),
+        Ok(BoundedLine::TooLong) => {
             send_response(
                 &mut stream,
                 414,
@@ -146,7 +146,16 @@ pub(crate) fn handle_connection(
             )?;
             return Ok(());
         }
-        BoundedLine::Line(line) => line,
+        Ok(BoundedLine::Line(line)) => line,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
     };
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -163,9 +172,9 @@ pub(crate) fn handle_connection(
         if Instant::now() > header_deadline {
             return Ok(());
         }
-        let line = match read_bounded_line(&mut reader, MAX_HTTP_LINE_BYTES)? {
-            BoundedLine::Eof => break,
-            BoundedLine::TooLong => {
+        let line = match read_bounded_line(&mut reader, MAX_HTTP_LINE_BYTES, header_deadline) {
+            Ok(BoundedLine::Eof) => break,
+            Ok(BoundedLine::TooLong) => {
                 send_response(
                     &mut stream,
                     431,
@@ -176,7 +185,16 @@ pub(crate) fn handle_connection(
                 )?;
                 return Ok(());
             }
-            BoundedLine::Line(line) => line,
+            Ok(BoundedLine::Line(line)) => line,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
         };
         if line.trim().is_empty() {
             break;
@@ -235,6 +253,26 @@ pub(crate) fn handle_connection(
                         return Ok(());
                     }
                 }
+            }
+            if matches!(
+                key.as_str(),
+                "host"
+                    | "origin"
+                    | "sec-fetch-site"
+                    | "transfer-encoding"
+                    | "x-agenthub-csrf"
+                    | "content-type"
+            ) && headers.contains_key(&key)
+            {
+                send_response(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    "text/plain; charset=utf-8",
+                    b"duplicate header not allowed",
+                    Some("no-store"),
+                )?;
+                return Ok(());
             }
             headers.insert(key, val);
         }
@@ -447,7 +485,7 @@ pub(crate) fn handle_connection(
             Some(v) if v == ASSETS_VERSION => "no-cache, must-revalidate",
             _ => "no-cache",
         };
-        let sheet = asset_text(DASHBOARD_CSS, "dashboard.css");
+        let sheet = asset_bundle_text(DASHBOARD_CSS_PARTS, dashboard_css_embedded());
         send_response(
             &mut stream,
             200,
@@ -469,7 +507,7 @@ pub(crate) fn handle_connection(
             Some(v) if v == ASSETS_VERSION => "no-cache, must-revalidate",
             _ => "no-cache",
         };
-        let script = asset_text(DASHBOARD_JS, "dashboard.js");
+        let script = asset_bundle_text(DASHBOARD_JS_PARTS, dashboard_js_embedded());
         send_response(
             &mut stream,
             200,
@@ -483,6 +521,18 @@ pub(crate) fn handle_connection(
 
     // the debug build's watcher: answer as soon as anything under resources/
     // changes, or after twenty seconds, so the page's next ask hears it
+    if path == "/dev-reload.js" && dev_assets() {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "text/javascript; charset=utf-8",
+            DEV_RELOAD_JS.as_bytes(),
+            Some("no-store"),
+        )?;
+        return Ok(());
+    }
+
     if path == "/api/dev/wait" && dev_assets() {
         let since = query.get("since").cloned().unwrap_or_default();
         let mut stamp = assets_stamp();
@@ -509,7 +559,13 @@ pub(crate) fn handle_connection(
     // page ask every two seconds: the daemon answers only when a scan pass
     // found a change, and every row of the snapshot therefore lands in the
     // browser at the same moment instead of at each provider's own cache age.
-    if path == "/api/events" {
+    let wants_sse = method == "GET"
+        && path == "/api/events"
+        && (!query.contains_key("after")
+            || headers
+                .get("accept")
+                .is_some_and(|v| v.to_ascii_lowercase().contains("text/event-stream")));
+    if wants_sse {
         drop(web_permit.take());
         let prev_sse = sse_counter.fetch_add(1, Ordering::AcqRel);
         if prev_sse >= MAX_ACTIVE_SSE_CONNECTIONS {
@@ -560,7 +616,7 @@ pub(crate) fn handle_connection(
     let page = if dev_assets() {
         page.replace(
             "</body>",
-            &format!("<script>{DEV_RELOAD_JS}</script></body>"),
+            r#"<script src="/dev-reload.js" defer></script></body>"#,
         )
     } else {
         page

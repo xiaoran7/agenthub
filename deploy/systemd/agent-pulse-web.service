@@ -5,20 +5,36 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# 生产部署前请创建独立的非特权前端账号（与后端 API 账号 agentpulse 隔离）：
+#   useradd -r -s /usr/sbin/nologin agentpulse-web
+# 如需覆盖默认端口或网关地址，可创建仅包含前端变量的 /etc/agent-pulse/web.env（权限 0640，属组 agentpulse-web），
+# 严禁将包含数据库密码与 HMAC 密钥的 /etc/agent-pulse/agent-pulse.env 挂载给前端 nginx。
+User=agentpulse-web
+Group=agentpulse-web
+UMask=0027
 WorkingDirectory=/opt/agent-pulse
-EnvironmentFile=/etc/agent-pulse/agent-pulse.env
+Environment=WEB_HOST=127.0.0.1
 Environment=WEB_PORT=3000
 Environment=WEB_ROOT=/opt/agent-pulse/web
 Environment=GATEWAY_ORIGIN=http://127.0.0.1:3001
 Environment=GATEWAY_ACCESS_TOKEN=
+EnvironmentFile=-/etc/agent-pulse/web.env
 # 渲染只替换这几个占位符，nginx 运行期变量（$host 等）保持原样。
-Environment="RENDER_VARS=${GATEWAY_ORIGIN} ${GATEWAY_ACCESS_TOKEN} ${WEB_PORT} ${WEB_ROOT}"
-ExecStartPre=/bin/sh -c 'mkdir -p /etc/agent-pulse && envsubst "$RENDER_VARS" < /opt/agent-pulse/deploy/nginx/agenthub-web.conf.template > /etc/agent-pulse/web.conf.d'
+Environment="RENDER_VARS=${GATEWAY_ORIGIN} ${GATEWAY_ACCESS_TOKEN} ${WEB_HOST} ${WEB_PORT} ${WEB_ROOT}"
+RuntimeDirectory=agent-pulse-web
+RuntimeDirectoryMode=0750
+LogsDirectory=agent-pulse-web
+LogsDirectoryMode=0750
+CacheDirectory=agent-pulse-web
+CacheDirectoryMode=0750
+ExecStartPre=/bin/sh -c 'umask 027 && envsubst "$RENDER_VARS" < /opt/agent-pulse/deploy/nginx/agenthub-web.conf.template > /run/agent-pulse-web/web.conf && chmod 640 /run/agent-pulse-web/web.conf'
 ExecStart=/usr/sbin/nginx -c /etc/agent-pulse/nginx.conf -g "daemon off;"
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true
 NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

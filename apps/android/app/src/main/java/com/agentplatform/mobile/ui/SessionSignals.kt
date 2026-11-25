@@ -6,6 +6,7 @@ import com.agentplatform.mobile.data.PendingQuestion
 import com.agentplatform.mobile.data.RemoteEvent
 import com.agentplatform.mobile.data.objects
 import com.agentplatform.mobile.data.optNullableString
+import com.agentplatform.mobile.data.optStringOrEmpty
 import com.agentplatform.mobile.data.paramsOf
 import org.json.JSONObject
 
@@ -16,6 +17,16 @@ import org.json.JSONObject
 // questions from the session event stream.
 // =========================================================================
 
+private fun extractErrorMessage(container: JSONObject?): String? {
+    val raw = container?.opt("error") ?: return null
+    if (raw === JSONObject.NULL) return null
+    return when (raw) {
+        is String -> raw.trim().takeIf { it.isNotEmpty() }
+        is JSONObject -> raw.optNullableString("message")?.trim()?.takeIf { it.isNotEmpty() }
+        else -> null
+    }
+}
+
 private fun applyFailureOnTurnCompleted(
     current: TurnFailure?,
     event: JSONObject,
@@ -23,15 +34,13 @@ private fun applyFailureOnTurnCompleted(
 ): TurnFailure? {
     val turnObj = params?.optJSONObject("turn")
     val completedTurnId =
-        turnObj?.optString("id")?.takeIf { it.isNotEmpty() }
-            ?: params?.optString("turnId")?.takeIf { it.isNotEmpty() }
+        turnObj?.optNullableString("id")
+            ?: params?.optNullableString("turnId")
     val turnStatus =
-        turnObj?.optString("status")?.takeIf { it.isNotEmpty() }
-            ?: params?.optString("status")?.takeIf { it.isNotEmpty() }
-    val execState = event.optJSONObject("binding")?.optString("execution_state").orEmpty()
-    val turnErrMsg =
-        turnObj?.optJSONObject("error")?.optString("message")?.trim()?.takeIf { it.isNotEmpty() }
-            ?: params?.optJSONObject("error")?.optString("message")?.trim()?.takeIf { it.isNotEmpty() }
+        turnObj?.optNullableString("status")
+            ?: params?.optNullableString("status")
+    val execState = event.optJSONObject("binding")?.optNullableString("execution_state").orEmpty()
+    val turnErrMsg = extractErrorMessage(turnObj) ?: extractErrorMessage(params)
 
     if (turnErrMsg != null) {
         return TurnFailure(turnId = completedTurnId ?: current?.turnId, message = turnErrMsg, retrying = false)
@@ -132,18 +141,16 @@ fun latestTurnFailure(events: List<RemoteEvent>, hubSessionId: String): TurnFail
         val event = envelope.event ?: continue
         val bindingHub = event.optJSONObject("binding")?.optNullableString("hub_session_id")
         if (bindingHub != null && bindingHub != hubSessionId) continue
-        when (event.optString("kind")) {
+        when (event.optStringOrEmpty("kind")) {
             "turn/started" -> failure = null
             "turn/completed" ->
                 failure = applyFailureOnTurnCompleted(failure, event, envelope.paramsOf())
             "error" -> {
                 val params = envelope.paramsOf() ?: continue
-                val error = params.optJSONObject("error") ?: continue
-                val message = error.optString("message").trim()
-                if (message.isEmpty()) continue
+                val message = extractErrorMessage(params) ?: continue
                 failure =
                     TurnFailure(
-                        turnId = params.optString("turnId").takeIf { it.isNotEmpty() },
+                        turnId = params.optNullableString("turnId"),
                         message = message,
                         retrying = params.optBoolean("willRetry", false),
                     )
@@ -163,7 +170,7 @@ fun latestContextUsage(
         val event = envelope.event ?: continue
         val bindingHub = event.optJSONObject("binding")?.optNullableString("hub_session_id")
         if (bindingHub != null && bindingHub != hubSessionId) continue
-        if (event.optString("kind") != "thread/tokenUsage/updated") continue
+        if (event.optStringOrEmpty("kind") != "thread/tokenUsage/updated") continue
         parseReportedTokenUsage(envelope.paramsOf(), candidate)?.let { parsed ->
             usage = parsed
         }
@@ -175,7 +182,7 @@ fun pendingApprovals(events: List<RemoteEvent>, hubSessionId: String): List<Pend
     val pending = LinkedHashMap<String, PendingApproval>()
     for (envelope in events) {
         val payload = envelope.payload
-        when (payload.optString("type")) {
+        when (payload.optStringOrEmpty("type")) {
             "ready" -> {
                 val reported = payload.optJSONArray("pending_approvals")
                 if (reported != null) {
@@ -190,29 +197,29 @@ fun pendingApprovals(events: List<RemoteEvent>, hubSessionId: String): List<Pend
             "host_lost" -> pending.clear()
             "receipt" -> {
                 val receipt = payload.optJSONObject("receipt") ?: continue
-                if (receipt.optString("status") == "accepted") {
-                    receipt.optJSONObject("result")
-                        ?.optString("approval_id")
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let(pending::remove)
+                if (receipt.optStringOrEmpty("status") == "accepted") {
+                    val res = receipt.optJSONObject("result")
+                    if (res?.optBoolean("response_sent", false) == true) {
+                        res.optNullableString("approval_id")?.let(pending::remove)
+                    }
                 }
             }
             "event" -> {
                 val event = payload.optJSONObject("event") ?: continue
-                when (event.optString("kind")) {
+                when (event.optStringOrEmpty("kind")) {
                     "approval_requested" ->
                         event.optJSONObject("approval")
                             ?.let(PendingApproval::parse)
                             ?.takeIf { it.hubSessionId == hubSessionId }
                             ?.let { pending[it.approvalId] = it }
                     "approval_resolved" ->
-                        event.optString("approval_id")
+                        event.optStringOrEmpty("approval_id")
                             .takeIf { it.isNotEmpty() }
                             ?.let(pending::remove)
                     "turn/completed" ->
                         if (
                             event.optJSONObject("binding")
-                                ?.optString("hub_session_id") == hubSessionId
+                                ?.optStringOrEmpty("hub_session_id") == hubSessionId
                         ) {
                             pending.clear()
                         }
@@ -227,7 +234,7 @@ fun pendingQuestions(events: List<RemoteEvent>, hubSessionId: String): List<Pend
     val pending = LinkedHashMap<String, PendingQuestion>()
     for (envelope in events) {
         val payload = envelope.payload
-        when (payload.optString("type")) {
+        when (payload.optStringOrEmpty("type")) {
             "ready" -> {
                 val reported = payload.optJSONArray("pending_questions")
                 if (reported != null) {
@@ -242,29 +249,29 @@ fun pendingQuestions(events: List<RemoteEvent>, hubSessionId: String): List<Pend
             "host_lost" -> pending.clear()
             "receipt" -> {
                 val receipt = payload.optJSONObject("receipt") ?: continue
-                if (receipt.optString("status") == "accepted") {
-                    receipt.optJSONObject("result")
-                        ?.optString("question_id")
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let(pending::remove)
+                if (receipt.optStringOrEmpty("status") == "accepted") {
+                    val res = receipt.optJSONObject("result")
+                    if (res?.optBoolean("response_sent", false) == true) {
+                        res.optNullableString("question_id")?.let(pending::remove)
+                    }
                 }
             }
             "event" -> {
                 val event = payload.optJSONObject("event") ?: continue
-                when (event.optString("kind")) {
+                when (event.optStringOrEmpty("kind")) {
                     "question_requested" ->
                         event.optJSONObject("question")
                             ?.let(PendingQuestion::parse)
                             ?.takeIf { it.hubSessionId == hubSessionId }
                             ?.let { pending[it.questionId] = it }
                     "question_resolved" ->
-                        event.optString("question_id")
+                        event.optStringOrEmpty("question_id")
                             .takeIf { it.isNotEmpty() }
                             ?.let(pending::remove)
                     "turn/completed" ->
                         if (
                             event.optJSONObject("binding")
-                                ?.optString("hub_session_id") == hubSessionId
+                                ?.optStringOrEmpty("hub_session_id") == hubSessionId
                         ) {
                             pending.clear()
                         }
@@ -294,7 +301,7 @@ fun analyzeSessionSignals(
 
     for (envelope in events) {
         val payload = envelope.payload
-        when (payload.optString("type")) {
+        when (payload.optStringOrEmpty("type")) {
             "ready" -> {
                 val reportedApprovals = payload.optJSONArray("pending_approvals")
                 if (reportedApprovals != null) {
@@ -321,27 +328,29 @@ fun analyzeSessionSignals(
             }
             "receipt" -> {
                 val receipt = payload.optJSONObject("receipt") ?: continue
-                if (receipt.optString("status") == "accepted") {
+                if (receipt.optStringOrEmpty("status") == "accepted") {
                     val res = receipt.optJSONObject("result")
-                    res?.optString("approval_id")?.takeIf { it.isNotEmpty() }?.let(approvals::remove)
-                    res?.optString("question_id")?.takeIf { it.isNotEmpty() }?.let(questions::remove)
+                    if (res?.optBoolean("response_sent", false) == true) {
+                        res.optNullableString("approval_id")?.let(approvals::remove)
+                        res.optNullableString("question_id")?.let(questions::remove)
+                    }
                 }
             }
             "event" -> {
                 val event = payload.optJSONObject("event") ?: continue
                 val bindingObj = event.optJSONObject("binding")
-                val bindingHubExact = bindingObj?.optString("hub_session_id")
+                val bindingHubExact = bindingObj?.optStringOrEmpty("hub_session_id")
                 val bindingHubNullable = bindingObj?.optNullableString("hub_session_id")
                 val matchesHubOrGlobal = bindingHubNullable == null || bindingHubNullable == hubSessionId
 
-                when (event.optString("kind")) {
+                when (event.optStringOrEmpty("kind")) {
                     "approval_requested" ->
                         event.optJSONObject("approval")
                             ?.let(PendingApproval::parse)
                             ?.takeIf { it.hubSessionId == hubSessionId }
                             ?.let { approvals[it.approvalId] = it }
                     "approval_resolved" ->
-                        event.optString("approval_id")
+                        event.optStringOrEmpty("approval_id")
                             .takeIf { it.isNotEmpty() }
                             ?.let(approvals::remove)
                     "question_requested" ->
@@ -350,7 +359,7 @@ fun analyzeSessionSignals(
                             ?.takeIf { it.hubSessionId == hubSessionId }
                             ?.let { questions[it.questionId] = it }
                     "question_resolved" ->
-                        event.optString("question_id")
+                        event.optStringOrEmpty("question_id")
                             .takeIf { it.isNotEmpty() }
                             ?.let(questions::remove)
                     "turn/started" ->
@@ -367,16 +376,13 @@ fun analyzeSessionSignals(
                     "error" ->
                         if (matchesHubOrGlobal) {
                             val params = envelope.paramsOf() ?: continue
-                            val err = params.optJSONObject("error") ?: continue
-                            val message = err.optString("message").trim()
-                            if (message.isNotEmpty()) {
-                                failure =
-                                    TurnFailure(
-                                        turnId = params.optString("turnId").takeIf { it.isNotEmpty() },
-                                        message = message,
-                                        retrying = params.optBoolean("willRetry", false),
-                                    )
-                            }
+                            val message = extractErrorMessage(params) ?: continue
+                            failure =
+                                TurnFailure(
+                                    turnId = params.optNullableString("turnId"),
+                                    message = message,
+                                    retrying = params.optBoolean("willRetry", false),
+                                )
                         }
                     "thread/tokenUsage/updated" ->
                         if (matchesHubOrGlobal) {

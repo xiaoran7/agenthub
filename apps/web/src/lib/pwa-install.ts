@@ -156,18 +156,28 @@ export function usePwaInstall(): {
     promptRef.current = undefined;
     currentSnapshot = { state: "installing", prompt: undefined };
     notifyListeners();
-    await prompt.prompt();
-    const choice = await prompt.userChoice;
-    currentSnapshot = {
-      ...currentSnapshot,
-      state:
-        choice.outcome === "accepted"
-          ? "submitted"
-          : currentSnapshot.prompt !== undefined
-            ? "available"
-            : "unavailable",
-    };
-    notifyListeners();
+    try {
+      await prompt.prompt();
+      const choice = await prompt.userChoice;
+      currentSnapshot = {
+        ...currentSnapshot,
+        state:
+          choice.outcome === "accepted"
+            ? "submitted"
+            : currentSnapshot.prompt !== undefined
+              ? "available"
+              : "unavailable",
+      };
+      notifyListeners();
+    } catch (error) {
+      currentSnapshot = {
+        ...currentSnapshot,
+        state:
+          currentSnapshot.prompt !== undefined ? "available" : "unavailable",
+      };
+      notifyListeners();
+      throw error;
+    }
   }, []);
 
   return { state, install };

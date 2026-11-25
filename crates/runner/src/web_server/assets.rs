@@ -24,10 +24,93 @@ pub(crate) const ICON_512_PNG: &[u8] = include_bytes!("../../resources/icon-512.
 
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
 pub(crate) const INDEX_HTML: &str = include_str!("../../resources/dashboard.html");
-pub(crate) const DASHBOARD_CSS: &str = include_str!("../../resources/dashboard.css");
-/// the console's behaviour, kept in its own file so `node --check` and any
-/// formatter can read it without parsing the page
-pub(crate) const DASHBOARD_JS: &str = include_str!("../../resources/dashboard.js");
+pub(crate) const DASHBOARD_CSS_PARTS: &[(&str, &str)] = &[
+    (
+        "dashboard/01-tokens-and-primitives.css",
+        include_str!("../../resources/dashboard/01-tokens-and-primitives.css"),
+    ),
+    (
+        "dashboard/02-layout-and-views.css",
+        include_str!("../../resources/dashboard/02-layout-and-views.css"),
+    ),
+    (
+        "dashboard/03-settings-and-motion.css",
+        include_str!("../../resources/dashboard/03-settings-and-motion.css"),
+    ),
+    (
+        "dashboard/04-usage-and-plugins.css",
+        include_str!("../../resources/dashboard/04-usage-and-plugins.css"),
+    ),
+];
+/// the console's behaviour, split into cohesive domain modules so `node --check`,
+/// formatters, and line-limit checks can read each part independently
+pub(crate) const DASHBOARD_JS_PARTS: &[(&str, &str)] = &[
+    (
+        "dashboard/01-core-state.js",
+        include_str!("../../resources/dashboard/01-core-state.js"),
+    ),
+    (
+        "dashboard/02-nav-and-refresh.js",
+        include_str!("../../resources/dashboard/02-nav-and-refresh.js"),
+    ),
+    (
+        "dashboard/03-agents-and-sessions.js",
+        include_str!("../../resources/dashboard/03-agents-and-sessions.js"),
+    ),
+    (
+        "dashboard/04-sessions-detail-and-workspaces.js",
+        include_str!("../../resources/dashboard/04-sessions-detail-and-workspaces.js"),
+    ),
+    (
+        "dashboard/05-capabilities-and-device.js",
+        include_str!("../../resources/dashboard/05-capabilities-and-device.js"),
+    ),
+    (
+        "dashboard/06-usage-core.js",
+        include_str!("../../resources/dashboard/06-usage-core.js"),
+    ),
+    (
+        "dashboard/07-usage-charts.js",
+        include_str!("../../resources/dashboard/07-usage-charts.js"),
+    ),
+    (
+        "dashboard/08-usage-filters.js",
+        include_str!("../../resources/dashboard/08-usage-filters.js"),
+    ),
+    (
+        "dashboard/09-usage-tables-and-export.js",
+        include_str!("../../resources/dashboard/09-usage-tables-and-export.js"),
+    ),
+    (
+        "dashboard/10-settings-and-plugins.js",
+        include_str!("../../resources/dashboard/10-settings-and-plugins.js"),
+    ),
+    (
+        "dashboard/11-stream-theme-and-device-actions.js",
+        include_str!("../../resources/dashboard/11-stream-theme-and-device-actions.js"),
+    ),
+];
+
+fn join_embedded_parts(parts: &[(&str, &str)]) -> String {
+    let mut out = String::new();
+    for (idx, (_, content)) in parts.iter().enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        out.push_str(content);
+    }
+    out
+}
+
+pub(crate) fn dashboard_css_embedded() -> &'static str {
+    static BUNDLE: OnceLock<String> = OnceLock::new();
+    BUNDLE.get_or_init(|| join_embedded_parts(DASHBOARD_CSS_PARTS))
+}
+
+pub(crate) fn dashboard_js_embedded() -> &'static str {
+    static BUNDLE: OnceLock<String> = OnceLock::new();
+    BUNDLE.get_or_init(|| join_embedded_parts(DASHBOARD_JS_PARTS))
+}
 
 /// A debug build (`cargo run`) reads the page, the sheet and the script from
 /// `resources/` on every request and watches them, as magpie's `make dev`
@@ -63,27 +146,51 @@ pub(crate) fn asset_text(embedded: &'static str, name: &str) -> String {
     embedded.to_owned()
 }
 
+pub(crate) fn asset_bundle_text(parts: &[(&str, &str)], embedded: &'static str) -> String {
+    if dev_assets() {
+        let base = assets_dir();
+        let mut out = String::new();
+        for (idx, (rel_path, fallback)) in parts.iter().enumerate() {
+            if idx > 0 {
+                out.push('\n');
+            }
+            match std::fs::read_to_string(base.join(rel_path)) {
+                Ok(text) => out.push_str(&text),
+                Err(_) => out.push_str(fallback),
+            }
+        }
+        return out;
+    }
+    embedded.to_owned()
+}
+
 pub(crate) fn assets_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources")
 }
 
 /// The newest modification time under `resources/`, as one string: a change
 /// to any of the console's files changes it, and the page reloads.
-pub(crate) fn assets_stamp() -> String {
-    let mut newest = std::time::SystemTime::UNIX_EPOCH;
-    if let Ok(entries) = std::fs::read_dir(assets_dir()) {
+fn scan_newest_mtime(dir: &Path, newest: &mut std::time::SystemTime) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
+                if meta.is_dir() {
+                    scan_newest_mtime(&entry.path(), newest);
+                } else if meta.is_file() {
                     if let Ok(modified) = meta.modified() {
-                        if modified > newest {
-                            newest = modified;
+                        if modified > *newest {
+                            *newest = modified;
                         }
                     }
                 }
             }
         }
     }
+}
+
+pub(crate) fn assets_stamp() -> String {
+    let mut newest = std::time::SystemTime::UNIX_EPOCH;
+    scan_newest_mtime(&assets_dir(), &mut newest);
     newest
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos().to_string())
@@ -134,22 +241,24 @@ pub(crate) fn app_layout_json(port: u16, csrf_token: &str) -> String {
     layout.to_string()
 }
 
-/// The page as served: the layout object first, then the stylesheet and script
-/// URLs at this build's version.
+/// The page as served: the layout JSON data tag first, then the stylesheet and
+/// script URLs at this build's version.
 pub(crate) fn render_index_html(port: u16, csrf_token: &str) -> String {
     let layout = format!(
-        r#"<script>window.AppLayout = {};</script>"#,
-        app_layout_json(port, csrf_token)
+        r#"<script id="app-layout-data" type="application/json">{}</script>"#,
+        app_layout_json(port, csrf_token).replace("</", r"<\/")
     );
     // in a release the page is the copy embedded in the binary; a debug build
     // reads `resources/dashboard.html` so an edit shows without a rebuild
     let page = asset_text(INDEX_HTML, "dashboard.html");
-    // the page's fallback object opens its own script; the daemon's goes just
-    // before it. The page ships with CRLF line endings, so anchor on text only.
-    let marker = "// ---- the console's layout tokens";
-    let at = page.find(marker).unwrap_or(0);
-    let head = page[..at].rfind("<script>").unwrap_or(at);
-    let html = format!("{}  {layout}\n  {}", &page[..head], &page[head..]);
+    let placeholder = r#"<script id="app-layout-data" type="application/json">{}</script>"#;
+    let html = if page.contains(placeholder) {
+        page.replacen(placeholder, &layout, 1)
+    } else if let Some(head_end) = page.find("</head>") {
+        format!("{}  {layout}\n{}", &page[..head_end], &page[head_end..])
+    } else {
+        format!("{layout}\n{page}")
+    };
     // a debug build asks for the sheet and the script under a name that
     // changes with the files themselves, so a reload after an edit can never
     // be answered from a copy of the one before it

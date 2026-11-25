@@ -592,3 +592,125 @@ test("Codex preview and control handoff preserve explicit command intent", () =>
     "releasing_control",
   );
 });
+
+test("timestamps reject nonexistent calendar dates and accept leap days", () => {
+  const validLeap = structuredClone(fixture) as {
+    created_at: string;
+    events: Array<{ observed_at: string }>;
+  };
+  validLeap.created_at = "2024-02-29T12:00:00Z";
+  validLeap.events[0]!.observed_at = "2024-02-29T12:00:00Z";
+  assert.equal(parseSyncBatch(validLeap).created_at, "2024-02-29T12:00:00Z");
+
+  for (const invalidDate of [
+    "2026-02-31T00:00:00Z",
+    "2026-02-29T00:00:00Z",
+    "2026-04-31T00:00:00Z",
+    "2026-07-25T24:00:00Z",
+    "2026-07-25T00:00:00+25:00",
+  ]) {
+    const bad = structuredClone(fixture) as { created_at: string };
+    bad.created_at = invalidDate;
+    assert.throws(
+      () => parseSyncBatch(bad),
+      (error: unknown) =>
+        error instanceof ContractError && error.code === "invalid_field",
+    );
+  }
+});
+
+test("parseRemoteReady enforces question generation matching and unique question IDs", () => {
+  const workspace = "ws-project-0123456789abcdef";
+  const baseQuestion = {
+    question_id: "q-1",
+    hub_session_id: "hub-one",
+    host_generation: "generation-one",
+    turn_id: "turn-1",
+    prompt: "Proceed?",
+  };
+  const validReady = {
+    type: "ready",
+    host_generation: "generation-one",
+    workspaces: [workspace],
+    sessions: [],
+    pending_questions: [baseQuestion],
+  };
+  assert.deepEqual(parseRemoteReady(validReady), validReady);
+
+  assert.throws(
+    () =>
+      parseRemoteReady({
+        ...validReady,
+        pending_questions: [
+          { ...baseQuestion, host_generation: "generation-two" },
+        ],
+      }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () =>
+      parseRemoteReady({
+        ...validReady,
+        pending_questions: [baseQuestion, { ...baseQuestion }],
+      }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
+});
+
+test("RFC 3339 timestamps reject year 0000 which PostgreSQL timestamptz refuses", () => {
+  const zeroYearBatch = structuredClone(fixture) as {
+    created_at: string;
+    events: Array<{ observed_at: string }>;
+  };
+  zeroYearBatch.created_at = "0000-01-01T00:00:00Z";
+  assert.throws(
+    () => parseSyncBatch(zeroYearBatch),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
+
+  const zeroYearEvent = structuredClone(fixture) as {
+    sent_at: string;
+    events: Array<{ observed_at: string }>;
+  };
+  zeroYearEvent.events[0]!.observed_at = "0000-06-15T12:00:00+08:00";
+  assert.throws(
+    () => parseSyncBatch(zeroYearEvent),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
+});
+
+test("parseRemoteReady accepts valid workspace_labels and rejects malformed keys or empty labels", () => {
+  const validReady = {
+    type: "ready",
+    host_generation: "generation-one",
+    workspaces: ["ws-alpha-0123456789abcdef"],
+    workspace_labels: {
+      "ws-alpha-0123456789abcdef": "~/projects/alpha",
+    },
+    sessions: [],
+  };
+  assert.deepEqual(parseRemoteReady(validReady), validReady);
+
+  assert.throws(
+    () =>
+      parseRemoteReady({
+        ...validReady,
+        workspace_labels: { "/raw/path": "~/projects/alpha" },
+      }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () =>
+      parseRemoteReady({
+        ...validReady,
+        workspace_labels: { "ws-alpha-0123456789abcdef": "   " },
+      }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
+});

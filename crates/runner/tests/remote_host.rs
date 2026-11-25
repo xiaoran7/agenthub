@@ -1194,19 +1194,19 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
 fn acp_session_routing_in_multiprovider_transport() {
     let mut transport = MultiProviderTransport::new(None);
 
-    // 1. thread/read for an ACP session returns an idle thread with its session id
-    let read_res = transport
+    // 1. Unknown ACP sessions fail closed with native_session_not_found (routed to ACP, not Codex).
+    let read_err = transport
         .request("thread/read", json!({ "threadId": "acp_session_test_1" }))
-        .expect("thread/read should succeed");
-    assert_eq!(read_res["thread"]["id"], "acp_session_test_1");
-    assert_eq!(read_res["thread"]["status"]["type"], "idle");
+        .unwrap_err();
+    assert_eq!(read_err.code, "native_session_not_found");
+    assert!(!read_err.outcome_unknown);
 
-    // 2. thread/resume for an ACP session returns the session
-    let resume_res = transport
+    // 2. thread/resume for an unknown ACP session also returns native_session_not_found.
+    let resume_err = transport
         .request("thread/resume", json!({ "threadId": "acp_session_test_1" }))
-        .expect("thread/resume should succeed");
-    assert_eq!(resume_res["thread"]["id"], "acp_session_test_1");
-    assert_eq!(resume_res["thread"]["status"]["type"], "idle");
+        .unwrap_err();
+    assert_eq!(resume_err.code, "native_session_not_found");
+    assert!(!resume_err.outcome_unknown);
 
     // 3. thread/archive and thread/unarchive succeed for an ACP session
     assert!(
@@ -1441,4 +1441,48 @@ fn restored_codex_binding_does_not_resume_on_runner_startup() {
     assert_eq!(bindings[0].provider_session_id, native_id);
     assert!(!bindings[0].control_connected);
     assert!(clean_transport.0.lock().unwrap().calls.is_empty());
+}
+
+#[test]
+fn question_resolved_event_preserves_question_id() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-q1");
+
+    fake.event(json!({
+        "id": 201,
+        "method": "client/askQuestion",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-q1",
+            "prompt": "Continue?"
+        }
+    }));
+    let asked_events = host.poll().unwrap();
+    let asked = asked_events
+        .iter()
+        .find(|e| e.kind == "question_requested")
+        .expect("question_requested event");
+    let expected_qid = asked
+        .question_id
+        .clone()
+        .expect("question_id on question_requested");
+
+    fake.event(json!({
+        "method": "serverRequest/resolved",
+        "params": {
+            "threadId": "native-real",
+            "requestId": 201
+        }
+    }));
+    let resolved_events = host.poll().unwrap();
+    let resolved = resolved_events
+        .iter()
+        .find(|e| e.kind == "question_resolved")
+        .expect("question_resolved event");
+    assert_eq!(
+        resolved.question_id.as_deref(),
+        Some(expected_qid.as_str()),
+        "question_resolved must preserve question_id"
+    );
 }

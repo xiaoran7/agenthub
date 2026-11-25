@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::Path,
@@ -9,6 +10,67 @@ use serde::de::DeserializeSeed;
 use serde_json::Value;
 
 use super::*;
+
+#[derive(Default)]
+struct ClaudeContextUsageTracker {
+    seen_message_usage: HashMap<String, (u64, u64, u64, u64)>,
+}
+
+fn record_claude_context_usage(
+    context: &mut LocalSessionContext,
+    tracker: Option<&mut ClaudeContextUsageTracker>,
+    message_id: Option<&str>,
+    total_input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+) {
+    if total_input == 0 && output == 0 {
+        return;
+    }
+    if total_input > 0 {
+        context.context_used_tokens = Some(total_input);
+    }
+    let prev = if let (Some(tracker), Some(mid)) =
+        (tracker, message_id.map(str::trim).filter(|s| !s.is_empty()))
+    {
+        tracker.seen_message_usage.insert(
+            mid.to_owned(),
+            (total_input, output, cache_read, cache_write),
+        )
+    } else {
+        None
+    };
+    let (p_in, p_out, p_cr, p_cw) = prev.unwrap_or((0, 0, 0, 0));
+    context.input_tokens = Some(
+        context
+            .input_tokens
+            .unwrap_or(0)
+            .saturating_sub(p_in)
+            .saturating_add(total_input),
+    );
+    context.output_tokens = Some(
+        context
+            .output_tokens
+            .unwrap_or(0)
+            .saturating_sub(p_out)
+            .saturating_add(output),
+    );
+    context.cache_read_tokens = Some(
+        context
+            .cache_read_tokens
+            .unwrap_or(0)
+            .saturating_sub(p_cr)
+            .saturating_add(cache_read),
+    );
+    context.cache_write_tokens = Some(
+        context
+            .cache_write_tokens
+            .unwrap_or(0)
+            .saturating_sub(p_cw)
+            .saturating_add(cache_write),
+    );
+}
 
 pub(crate) fn claude_result_context_usage(value: &Value) -> Option<ContextUsage> {
     if value.get("type").and_then(Value::as_str) != Some("result") {
@@ -73,26 +135,43 @@ pub(crate) fn read_claude_session_context(
         fallback_id.unwrap_or_default(),
     );
     let mut reader = BufReader::new(file);
-    scan_claude_context_region(
+    let mut usage_tracker = ClaudeContextUsageTracker::default();
+    scan_claude_context_region_with_tracker(
         &mut reader,
         LOCAL_CONTEXT_HEAD_BYTES.min(length),
         &mut context,
+        Some(&mut usage_tracker),
         program,
     )?;
-    if length > LOCAL_CONTEXT_HEAD_BYTES {
-        let tail_start = length.saturating_sub(LOCAL_CONTEXT_TAIL_BYTES);
-        reader
-            .seek(SeekFrom::Start(tail_start))
-            .map_err(|source| CollectorError::Io {
-                program: program.to_owned(),
-                source,
-            })?;
-        scan_claude_context_region(
-            &mut reader,
-            length.saturating_sub(tail_start),
-            &mut context,
-            program,
-        )?;
+    let head_end = reader.stream_position().unwrap_or(LOCAL_CONTEXT_HEAD_BYTES);
+    if length > head_end {
+        let tail_start = length
+            .saturating_sub(LOCAL_CONTEXT_TAIL_BYTES)
+            .max(head_end);
+        let mut remaining = length.saturating_sub(tail_start);
+        if tail_start > head_end {
+            reader
+                .seek(SeekFrom::Start(tail_start))
+                .map_err(|source| CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                })?;
+            let skipped =
+                discard_until_newline(&mut reader).map_err(|source| CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                })?;
+            remaining = remaining.saturating_sub(skipped);
+        }
+        if remaining > 0 {
+            scan_claude_context_region_with_tracker(
+                &mut reader,
+                remaining,
+                &mut context,
+                Some(&mut usage_tracker),
+                program,
+            )?;
+        }
     }
     let result = if context.agent_session_id.is_empty() {
         None
@@ -111,6 +190,23 @@ pub(crate) fn scan_claude_context_region(
     context: &mut LocalSessionContext,
     program: &str,
 ) -> Result<(), CollectorError> {
+    let mut usage_tracker = ClaudeContextUsageTracker::default();
+    scan_claude_context_region_with_tracker(
+        reader,
+        byte_limit,
+        context,
+        Some(&mut usage_tracker),
+        program,
+    )
+}
+
+fn scan_claude_context_region_with_tracker(
+    reader: &mut impl BufRead,
+    byte_limit: u64,
+    context: &mut LocalSessionContext,
+    mut usage_tracker: Option<&mut ClaudeContextUsageTracker>,
+    program: &str,
+) -> Result<(), CollectorError> {
     let mut consumed = 0_u64;
     while consumed < byte_limit {
         match read_spliced_line(reader) {
@@ -119,7 +215,11 @@ pub(crate) fn scan_claude_context_region(
                 bytes_consumed,
             } => {
                 consumed = consumed.saturating_add(bytes_consumed);
-                apply_claude_context_line(&text, context);
+                apply_claude_context_line_with_tracker(
+                    &text,
+                    context,
+                    usage_tracker.as_deref_mut(),
+                );
             }
             SplicedLine::Oversized {
                 head,
@@ -127,7 +227,12 @@ pub(crate) fn scan_claude_context_region(
                 bytes_consumed,
             } => {
                 consumed = consumed.saturating_add(bytes_consumed);
-                apply_oversized_claude_record(&head, &tail, context);
+                apply_oversized_claude_record_with_tracker(
+                    &head,
+                    &tail,
+                    context,
+                    usage_tracker.as_deref_mut(),
+                );
             }
             SplicedLine::Eof => break,
             SplicedLine::Io(source) => {
@@ -142,6 +247,14 @@ pub(crate) fn scan_claude_context_region(
 }
 
 pub(crate) fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
+    apply_claude_context_line_with_tracker(line, context, None);
+}
+
+fn apply_claude_context_line_with_tracker(
+    line: &str,
+    context: &mut LocalSessionContext,
+    usage_tracker: Option<&mut ClaudeContextUsageTracker>,
+) {
     let seed = ClaudeContextLineSeed {
         parse_array: line.contains("\"user\""),
     };
@@ -184,7 +297,13 @@ pub(crate) fn apply_claude_context_line(line: &str, context: &mut LocalSessionCo
                 .message
                 .as_ref()
                 .and_then(|m| m.model.as_deref())
-                .or(record.model.as_deref())
+                .filter(|value| value.trim() != "<synthetic>")
+                .or_else(|| {
+                    record
+                        .model
+                        .as_deref()
+                        .filter(|value| value.trim() != "<synthetic>")
+                })
                 .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
                 .or_else(|| context.model.clone());
             context.reasoning_effort = record
@@ -212,29 +331,16 @@ pub(crate) fn apply_claude_context_line(line: &str, context: &mut LocalSessionCo
                 let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
                 let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
                 let total_input = input.saturating_add(cache_write).saturating_add(cache_read);
-                if total_input > 0 || output > 0 {
-                    context.context_used_tokens = Some(total_input);
-                    context.input_tokens = Some(
-                        context
-                            .input_tokens
-                            .unwrap_or(0)
-                            .saturating_add(total_input),
-                    );
-                    context.output_tokens =
-                        Some(context.output_tokens.unwrap_or(0).saturating_add(output));
-                    context.cache_read_tokens = Some(
-                        context
-                            .cache_read_tokens
-                            .unwrap_or(0)
-                            .saturating_add(cache_read),
-                    );
-                    context.cache_write_tokens = Some(
-                        context
-                            .cache_write_tokens
-                            .unwrap_or(0)
-                            .saturating_add(cache_write),
-                    );
-                }
+                let msg_id = record.message.as_ref().and_then(|m| m.id.as_deref());
+                record_claude_context_usage(
+                    context,
+                    usage_tracker,
+                    msg_id,
+                    total_input,
+                    output,
+                    cache_read,
+                    cache_write,
+                );
             }
         }
         Some("queue-operation") if context.title.is_none() => {
@@ -289,6 +395,15 @@ pub(crate) fn apply_oversized_claude_record(
     tail: &str,
     context: &mut LocalSessionContext,
 ) {
+    apply_oversized_claude_record_with_tracker(head, tail, context, None);
+}
+
+fn apply_oversized_claude_record_with_tracker(
+    head: &str,
+    tail: &str,
+    context: &mut LocalSessionContext,
+    usage_tracker: Option<&mut ClaudeContextUsageTracker>,
+) {
     let is_assistant = head.contains(r#""role":"assistant""#)
         || head.contains(r#""role": "assistant""#)
         || head.contains(r#""type":"assistant""#)
@@ -297,9 +412,19 @@ pub(crate) fn apply_oversized_claude_record(
         || tail.contains(r#""type": "assistant""#);
 
     if is_assistant {
-        // 1. Model extraction (head preferred, tail fallback)
-        if let Some(model) = extract_quoted_json_field(head, "model")
-            .or_else(|| extract_quoted_json_field(tail, "model"))
+        let header_slice = claude_message_header_slice(head);
+        let before_content = claude_head_before_content(head);
+
+        // 1. Model extraction (message header before content preferred, tail fallback)
+        if let Some(model) = extract_first_quoted_json_field(header_slice, "model")
+            .filter(|m| m.trim() != "<synthetic>")
+            .or_else(|| {
+                extract_first_quoted_json_field(before_content, "model")
+                    .filter(|m| m.trim() != "<synthetic>")
+            })
+            .or_else(|| {
+                extract_quoted_json_field(tail, "model").filter(|m| m.trim() != "<synthetic>")
+            })
             && let Some(label) = metadata_label(&model, MAX_CONFIG_VALUE_CHARS)
         {
             context.model = Some(label);
@@ -307,7 +432,7 @@ pub(crate) fn apply_oversized_claude_record(
 
         // 2. Stop reason extraction (tail preferred as it trails the message)
         if let Some(reason) = extract_quoted_json_field(tail, "stop_reason")
-            .or_else(|| extract_quoted_json_field(head, "stop_reason"))
+            .or_else(|| extract_first_quoted_json_field(before_content, "stop_reason"))
             && !reason.is_empty()
         {
             context.turn_ended = Some(reason != "tool_use");
@@ -323,13 +448,16 @@ pub(crate) fn apply_oversized_claude_record(
             let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
             let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
             let total_input = input.saturating_add(cache_write).saturating_add(cache_read);
-            if total_input > 0 {
-                context.context_used_tokens = Some(total_input);
-                context.input_tokens = Some(total_input);
-                context.output_tokens = Some(output);
-                context.cache_read_tokens = Some(cache_read);
-                context.cache_write_tokens = Some(cache_write);
-            }
+            let msg_id = extract_first_quoted_json_field(header_slice, "id");
+            record_claude_context_usage(
+                context,
+                usage_tracker,
+                msg_id.as_deref(),
+                total_input,
+                output,
+                cache_read,
+                cache_write,
+            );
         }
 
         // Update context window tokens if model was updated
@@ -357,26 +485,82 @@ pub(crate) fn apply_oversized_claude_record(
     }
 }
 
-pub(crate) fn extract_quoted_json_field(text: &str, field: &str) -> Option<String> {
-    let pattern = format!("\"{}\"", field);
+pub(crate) fn claude_message_header_slice(head: &str) -> &str {
+    let msg_slice = head.find("\"message\"").map(|p| &head[p..]).unwrap_or(head);
+    msg_slice
+        .find("\"content\"")
+        .map(|p| &msg_slice[..p])
+        .unwrap_or(msg_slice)
+}
+
+pub(crate) fn claude_head_before_content(head: &str) -> &str {
+    head.find("\"content\"").map(|p| &head[..p]).unwrap_or(head)
+}
+
+fn is_escaped_quote(text: &str, quote_pos: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut backslashes = 0usize;
+    let mut idx = quote_pos;
+    while idx > 0 && bytes[idx - 1] == b'\\' {
+        backslashes += 1;
+        idx -= 1;
+    }
+    !backslashes.is_multiple_of(2)
+}
+
+fn parse_json_quoted_value(after_open_quote: &str) -> Option<String> {
+    let bytes = after_open_quote.as_bytes();
+    let mut escaped = false;
+    for (idx, &b) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if b == b'\\' {
+            escaped = true;
+        } else if b == b'"' {
+            let raw = &after_open_quote[..idx];
+            if !raw.contains('\\') {
+                return Some(raw.to_owned());
+            }
+            let quoted = format!("\"{raw}\"");
+            return Some(
+                serde_json::from_str::<String>(&quoted).unwrap_or_else(|_| raw.to_owned()),
+            );
+        }
+    }
+    None
+}
+
+fn find_quoted_json_field(text: &str, field: &str, first_only: bool) -> Option<String> {
+    let pattern = format!("\"{field}\"");
     let mut search_from = 0;
-    let mut last_match = None;
+    let mut matched = None;
     while let Some(pos) = text[search_from..].find(&pattern) {
         let actual_pos = search_from + pos;
-        let rest = &text[actual_pos + pattern.len()..];
-        // Skip whitespace and colon
-        let after_colon = rest.trim_start();
-        if let Some(after_colon) = after_colon.strip_prefix(':') {
-            let value_part = after_colon.trim_start();
-            if let Some(value_part) = value_part.strip_prefix('"')
-                && let Some(end_quote) = value_part.find('"')
+        if !is_escaped_quote(text, actual_pos) {
+            let rest = &text[actual_pos + pattern.len()..];
+            if let Some(after_colon) = rest.trim_start().strip_prefix(':')
+                && let Some(value_part) = after_colon.trim_start().strip_prefix('"')
+                && let Some(val) = parse_json_quoted_value(value_part)
             {
-                last_match = Some(value_part[..end_quote].to_owned());
+                if first_only {
+                    return Some(val);
+                }
+                matched = Some(val);
             }
         }
         search_from = actual_pos + pattern.len();
     }
-    last_match
+    matched
+}
+
+pub(crate) fn extract_first_quoted_json_field(text: &str, field: &str) -> Option<String> {
+    find_quoted_json_field(text, field, true)
+}
+
+pub(crate) fn extract_quoted_json_field(text: &str, field: &str) -> Option<String> {
+    find_quoted_json_field(text, field, false)
 }
 
 pub(crate) fn extract_closed_json_object(text: &str, field: &str) -> Option<String> {

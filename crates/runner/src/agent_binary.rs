@@ -213,6 +213,24 @@ pub fn rank_candidates(
     // candidate, not two fallback attempts.
     let mut by_path: BTreeMap<PathBuf, CandidateOrigin> = BTreeMap::new();
     for candidate in candidates.drain(..) {
+        if candidate.origin == CandidateOrigin::PathLookup
+            && !candidate.path.is_absolute()
+            && is_single_component_name(&candidate.path)
+        {
+            for resolved in resolve_in_path(&candidate.path.to_string_lossy()) {
+                let entry = by_path
+                    .entry(normalize_key(&resolved))
+                    .or_insert(candidate.origin);
+                if candidate.origin.rank() < entry.rank() {
+                    *entry = candidate.origin;
+                }
+            }
+            continue;
+        }
+        if !candidate.path.is_absolute() && candidate.origin != CandidateOrigin::EnvironmentOverride
+        {
+            continue;
+        }
         let entry = by_path
             .entry(normalize_key(&candidate.path))
             .or_insert(candidate.origin);
@@ -257,11 +275,60 @@ fn probe_all(
 /// Windows and Unix spell the same file differently once canonicalized;
 /// comparing raw strings would make `/path/claude` and `C:\path\claude.exe`
 /// two candidates. Case folding only applies to Windows paths.
+///
+/// Relative paths are never canonicalized so a bare name like `"claude"` cannot
+/// accidentally resolve against `./claude` in the current working directory.
 fn normalize_key(path: &Path) -> PathBuf {
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical = if path.is_absolute() {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    };
     #[cfg(windows)]
     let canonical = PathBuf::from(canonical.to_string_lossy().to_lowercase());
     canonical
+}
+
+fn is_single_component_name(path: &Path) -> bool {
+    let mut comps = path.components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
+}
+
+/// Resolves a bare executable name against absolute `PATH` directories only,
+/// skipping empty and relative entries (such as `"."`) to block CWD hijacking.
+fn resolve_in_path(stem: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Some(path_var) = env::var_os("PATH") else {
+        return found;
+    };
+    #[cfg(windows)]
+    let suffixes: &[&str] = &["exe", "cmd", "bat", ""];
+    #[cfg(not(windows))]
+    let suffixes: &[&str] = &[""];
+
+    for dir in env::split_paths(&path_var) {
+        if dir.as_os_str().is_empty() || !dir.is_absolute() {
+            continue;
+        }
+        for suffix in suffixes {
+            let file_name = if suffix.is_empty() || stem.contains('.') {
+                stem.to_owned()
+            } else {
+                format!("{stem}.{suffix}")
+            };
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                found.push(candidate);
+            }
+            if stem.contains('.') {
+                break;
+            }
+        }
+    }
+    found
 }
 
 /// The ordered set of executables worth trying for one agent.
@@ -434,7 +501,9 @@ pub fn claude_candidates() -> CandidateSet {
             CandidateOrigin::UserInstall,
         );
     }
-    set.push(PathBuf::from("claude"), CandidateOrigin::PathLookup);
+    for path in resolve_in_path("claude") {
+        set.push(path, CandidateOrigin::PathLookup);
+    }
     set
 }
 
@@ -686,5 +755,29 @@ mod tests {
             1,
             "the same executable is one candidate, not two"
         );
+    }
+
+    #[test]
+    fn relative_candidates_are_never_canonicalized_or_ranked() {
+        assert_eq!(
+            normalize_key(Path::new("./claude")),
+            PathBuf::from("./claude")
+        );
+        let ranked = rank_candidates(
+            vec![
+                BinaryCandidate::new(
+                    PathBuf::from("./claude"),
+                    None,
+                    CandidateOrigin::UserInstall,
+                ),
+                BinaryCandidate::new(
+                    PathBuf::from("sub/claude"),
+                    None,
+                    CandidateOrigin::ManagedInstall,
+                ),
+            ],
+            Duration::from_millis(1),
+        );
+        assert!(ranked.is_empty());
     }
 }

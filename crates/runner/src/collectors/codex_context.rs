@@ -37,6 +37,7 @@ pub fn collect_codex_session_contexts_from(
         program: program.clone(),
         source,
     })?;
+    let _ = connection.busy_timeout(std::time::Duration::from_millis(500));
     let columns = connection
         .prepare("PRAGMA table_info(threads)")
         .and_then(|mut statement| {
@@ -127,7 +128,8 @@ pub fn collect_codex_session_contexts_from(
             .and_then(|value| u64::try_from(value).ok())
             .filter(|value| *value > 0);
         if let Some(rollout_path) = rollout_path {
-            apply_codex_rollout_context(root, Path::new(&rollout_path), &mut context, &program)?;
+            let _ =
+                apply_codex_rollout_context(root, Path::new(&rollout_path), &mut context, &program);
         }
         contexts.push(context);
     }
@@ -271,20 +273,29 @@ fn apply_codex_rollout_context(
         context,
         program,
     )?;
-    if length > LOCAL_CONTEXT_HEAD_BYTES {
-        let tail_start = length.saturating_sub(LOCAL_CONTEXT_TAIL_BYTES);
-        reader
-            .seek(SeekFrom::Start(tail_start))
-            .map_err(|source| CollectorError::Io {
-                program: program.to_owned(),
-                source,
-            })?;
-        scan_codex_context_region(
-            &mut reader,
-            length.saturating_sub(tail_start),
-            context,
-            program,
-        )?;
+    let head_end_pos = reader.stream_position().unwrap_or(LOCAL_CONTEXT_HEAD_BYTES);
+    if length > head_end_pos {
+        let tail_start = length
+            .saturating_sub(LOCAL_CONTEXT_TAIL_BYTES)
+            .max(head_end_pos);
+        let mut remaining = length.saturating_sub(tail_start);
+        if tail_start > head_end_pos {
+            reader
+                .seek(SeekFrom::Start(tail_start))
+                .map_err(|source| CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                })?;
+            let skipped =
+                discard_until_newline(&mut reader).map_err(|source| CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                })?;
+            remaining = remaining.saturating_sub(skipped);
+        }
+        if remaining > 0 {
+            scan_codex_context_region(&mut reader, remaining, context, program)?;
+        }
     }
     Ok(())
 }
@@ -300,7 +311,10 @@ fn scan_codex_context_region(
         let line = match read_bounded_line(reader) {
             BoundedLine::Line(line) => line,
             BoundedLine::Eof => break,
-            BoundedLine::TooLarge => continue,
+            BoundedLine::TooLarge => {
+                consumed = consumed.saturating_add(MAX_PROTOCOL_LINE_BYTES as u64);
+                continue;
+            }
             BoundedLine::Io(source) => {
                 return Err(CollectorError::Io {
                     program: program.to_owned(),

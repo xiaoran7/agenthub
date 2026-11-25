@@ -30,8 +30,12 @@ pub fn lookup_session_context_usage(
 ) -> Option<ContextUsage> {
     let raw_id = session_id
         .strip_prefix("claude_")
+        .or_else(|| session_id.strip_prefix("codex_"))
         .or_else(|| session_id.strip_prefix("antigravity_"))
         .unwrap_or(session_id);
+    if !validate_safe_session_id(raw_id) {
+        return None;
+    }
 
     let is_claude = matches!(
         agent_type,
@@ -87,15 +91,24 @@ pub fn lookup_session_context_usage(
         crate::domain::AgentType::Codex | crate::domain::AgentType::Antigravity => {
             let contexts = match agent_type {
                 crate::domain::AgentType::Codex => {
-                    let codex_dir = home.join(".codex");
-                    let db_path = ["state_5.sqlite", "state_4.sqlite", "state.sqlite"]
-                        .into_iter()
-                        .map(|name| codex_dir.join(name))
-                        .find(|path| path.is_file())?;
+                    let codex_dir = resolve_codex_home_for(home);
+                    let db_path = discover_codex_state_database_in(&codex_dir).ok()??;
                     collect_codex_session_contexts_from(&db_path, 200).ok()?
                 }
                 crate::domain::AgentType::Antigravity => {
-                    collect_antigravity_session_contexts_from(home, 200).ok()?
+                    let mut merged = Vec::new();
+                    let mut seen_ids = HashSet::new();
+                    for ag_home in discover_antigravity_homes_for(home) {
+                        if let Ok(items) = collect_antigravity_session_contexts_from(&ag_home, 200)
+                        {
+                            for item in items {
+                                if seen_ids.insert(item.agent_session_id.clone()) {
+                                    merged.push(item);
+                                }
+                            }
+                        }
+                    }
+                    merged
                 }
                 _ => return None,
             };
@@ -137,4 +150,39 @@ pub fn lookup_session_context_usage(
         }
         crate::domain::AgentType::DeepseekHarness | crate::domain::AgentType::Plugin(_) => None,
     }
+}
+
+fn resolve_codex_home_for(home: &Path) -> PathBuf {
+    if let Some(env_path) = std::env::var_os("CODEX_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        && (home_dir().as_deref() == Some(home) || env_path.starts_with(home))
+    {
+        return env_path;
+    }
+    home.join(".codex")
+}
+
+fn discover_antigravity_homes_for(home: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push_if_dir = |p: PathBuf| {
+        if p.is_dir() && seen.insert(p.clone()) {
+            roots.push(p);
+        }
+    };
+    if let Some(env_path) = std::env::var_os("ANTIGRAVITY_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        && (home_dir().as_deref() == Some(home) || env_path.starts_with(home))
+    {
+        push_if_dir(env_path);
+    }
+    push_if_dir(home.join(".gemini").join("antigravity"));
+    push_if_dir(home.join(".gemini").join("antigravity-cli"));
+    push_if_dir(home.join(".antigravity"));
+    if home.join("brain").is_dir() {
+        push_if_dir(home.to_path_buf());
+    }
+    roots
 }

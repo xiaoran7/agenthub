@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -35,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.agentplatform.mobile.AppController
+import com.agentplatform.mobile.data.AgentPlugin
 import com.agentplatform.mobile.data.DeviceBinding
 import com.agentplatform.mobile.data.HostDevice
 import com.agentplatform.mobile.data.RemoteSessionRow
@@ -56,6 +58,7 @@ fun HostsScreen(
     onOpenSession: (String) -> Unit,
     onLaunch: (String) -> Unit,
     onRefresh: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var binding by remember { mutableStateOf<DeviceBinding?>(null) }
@@ -63,7 +66,8 @@ fun HostsScreen(
     var bindingCopied by remember { mutableStateOf(false) }
     var confirmRevokeId by remember { mutableStateOf<String?>(null) }
     var revokingId by remember { mutableStateOf<String?>(null) }
-    val activeHosts = remember(snapshot.hosts) { snapshot.hosts.filterNot { it.revoked } }
+    val activeHosts = remember(snapshot.hosts) { snapshot.hosts.filterNot { it.revoked }.distinctBy { it.runnerId } }
+    val sessionsByRunner = remember(snapshot.sessions) { snapshot.sessions.groupBy { it.runnerId } }
 
     LaunchedEffect(bindingCopied) {
         if (bindingCopied) {
@@ -78,6 +82,7 @@ fun HostsScreen(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
                 .statusBarsPadding()
+                .navigationBarsPadding()
                 .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
         contentPadding = PaddingValues(bottom = OrcaSpace.xl),
     ) {
@@ -90,22 +95,34 @@ fun HostsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (onBack != null) {
+                    MobileRoundButton(
+                        label = "返回",
+                        onClick = onBack,
+                        modifier = Modifier.padding(end = OrcaSpace.md),
+                    ) {
+                        OrcaBackChevron(MaterialTheme.colorScheme.onSurface)
+                    }
+                }
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = "电脑",
                         style = MaterialTheme.typography.headlineMedium,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
-                    Text(
-                        text = "管理已绑定的电脑 Runner，发起任务或生成一次性配对码。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = OrcaSpace.xxs),
-                    )
+                    if (onBack == null) {
+                        Text(
+                            text = "管理已绑定的电脑 Runner，发起任务或生成一次性配对码。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = OrcaSpace.xxs),
+                        )
+                    }
                 }
                 OrcaSecondaryButton(
                     label = if (bindingBusy) "生成中…" else "生成绑定码",
                     enabled = !bindingBusy,
+                    fillWidth = false,
                     modifier = Modifier.padding(start = OrcaSpace.sm),
                 ) {
                     bindingBusy = true
@@ -199,7 +216,8 @@ fun HostsScreen(
             Column(Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs)) {
                 HostCard(
                     host = host,
-                    sessions = snapshot.sessions.filter { it.runnerId == host.runnerId },
+                    sessions = sessionsByRunner[host.runnerId].orEmpty(),
+                    plugins = mergeHostPlugins(host.hello?.plugins, controller.state.plugins.orEmpty()),
                     confirmingRevoke = confirmRevokeId == host.runnerId,
                     revoking = revokingId == host.runnerId,
                     onLaunch = { onLaunch(host.runnerId) },
@@ -227,6 +245,7 @@ fun HostsScreen(
 private fun HostCard(
     host: HostDevice,
     sessions: List<RemoteSessionRow>,
+    plugins: List<AgentPlugin>,
     confirmingRevoke: Boolean,
     revoking: Boolean,
     onLaunch: () -> Unit,
@@ -316,9 +335,11 @@ private fun HostCard(
                     val provider =
                         engineOfSession(
                             session.binding.providerSessionId,
-                            host.hello?.candidates
-                                ?.firstOrNull { it.providerSessionId == session.binding.providerSessionId }
-                                ?.provider,
+                            session.provider
+                                ?: host.hello?.candidates
+                                    ?.firstOrNull { it.providerSessionId == session.binding.providerSessionId }
+                                    ?.provider,
+                            plugins,
                         )
                     val cleanTitle =
                         sanitizeSessionTitle(session.binding.title)

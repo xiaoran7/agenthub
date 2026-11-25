@@ -22,7 +22,7 @@ export function expectKeys(
   optional: readonly string[] = [],
 ): void {
   for (const key of required) {
-    if (!(key in value)) {
+    if (!Object.hasOwn(value, key)) {
       throw new ContractError("missing_field", `missing field ${key}`);
     }
   }

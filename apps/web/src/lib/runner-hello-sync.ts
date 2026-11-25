@@ -76,13 +76,16 @@ export function mergeRunnerHelloEntries(
     return [...snapshotRunners];
   }
   return snapshotRunners.map((runner) => {
+    if (runner.hello === null) {
+      return runner;
+    }
     const hello = entries[runner.runner_id]?.hello;
     if (hello === undefined || hello === null) {
       return runner;
     }
     const merged = {
-      ...(runner.hello ?? undefined),
       ...hello,
+      ...runner.hello,
     } as RemoteRunnerHello;
     return { ...runner, hello: merged };
   });

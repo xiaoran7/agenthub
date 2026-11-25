@@ -49,12 +49,14 @@ impl MultiProviderTransport {
                 .insert(raw_id.to_string(), model.clone());
         }
 
-        let resolved = cached.or(param_path).or_else(|| {
-            detail
-                .as_ref()
-                .map(|d| d.cwd.clone())
-                .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
-        });
+        let resolved = cached
+            .or_else(|| {
+                detail
+                    .as_ref()
+                    .map(|d| d.cwd.clone())
+                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+            })
+            .or(param_path);
         if let Some(ref cwd) = resolved {
             self.antigravity_cached_cwds
                 .insert(session_id.to_string(), cwd.clone());
@@ -65,6 +67,38 @@ impl MultiProviderTransport {
         let is_running = detail.as_ref().is_some_and(|d| d.is_running)
             || self.antigravity_active_turns.contains_key(session_id);
         resolved.map(|cwd| (cwd, title, is_running))
+    }
+
+    fn resolve_existing_antigravity_session(
+        &mut self,
+        session_id: &str,
+        param_cwd: Option<&str>,
+    ) -> Result<(PathBuf, Option<String>, bool), NativeError> {
+        let raw_id = session_id
+            .strip_prefix("antigravity_")
+            .unwrap_or(session_id);
+        let in_memory = self.antigravity_sessions.contains_key(session_id)
+            || self.antigravity_active_turns.contains_key(session_id)
+            || self.antigravity_known_real_ids.contains(session_id)
+            || self.antigravity_known_real_ids.contains(raw_id)
+            || self.antigravity_cached_cwds.contains_key(session_id)
+            || self.antigravity_cached_cwds.contains_key(raw_id);
+        let detail = crate::collectors::find_antigravity_session_detail(raw_id)
+            .ok()
+            .flatten();
+        let running_on_disk = crate::collectors::is_antigravity_session_running(raw_id);
+        if raw_id.is_empty() || (!in_memory && detail.is_none() && !running_on_disk) {
+            return Err(NativeError::rejected("native_session_not_found"));
+        }
+        let info = self.resolve_antigravity_cwd(session_id, param_cwd);
+        Ok(match info {
+            Some((cwd, title, is_running)) => (cwd, title, is_running || running_on_disk),
+            None => (
+                PathBuf::from("."),
+                detail.and_then(|d| d.title),
+                running_on_disk || self.antigravity_active_turns.contains_key(session_id),
+            ),
+        })
     }
 
     pub(crate) fn handle_antigravity_request(
@@ -78,15 +112,8 @@ impl MultiProviderTransport {
                 let raw_id = session_id
                     .strip_prefix("antigravity_")
                     .unwrap_or(session_id);
-                let info = self.resolve_antigravity_cwd(session_id, params["cwd"].as_str());
-                let (cwd, title, is_running) = match info {
-                    Some(tuple) => tuple,
-                    None => (
-                        PathBuf::from("."),
-                        None,
-                        crate::collectors::is_antigravity_session_running(raw_id),
-                    ),
-                };
+                let (cwd, title, is_running) =
+                    self.resolve_existing_antigravity_session(session_id, params["cwd"].as_str())?;
                 let status = if is_running {
                     json!({ "type": "running" })
                 } else {
@@ -106,6 +133,8 @@ impl MultiProviderTransport {
                 let raw_id = session_id
                     .strip_prefix("antigravity_")
                     .unwrap_or(session_id);
+                let (cwd, _, is_running) =
+                    self.resolve_existing_antigravity_session(session_id, params["cwd"].as_str())?;
                 if let Some(m) = params["model"]
                     .as_str()
                     .map(str::trim)
@@ -116,15 +145,6 @@ impl MultiProviderTransport {
                     self.antigravity_cached_models
                         .insert(raw_id.to_string(), m.to_string());
                 }
-                let (cwd, _, is_running) = self
-                    .resolve_antigravity_cwd(session_id, params["cwd"].as_str())
-                    .unwrap_or_else(|| {
-                        (
-                            PathBuf::from("."),
-                            None,
-                            crate::collectors::is_antigravity_session_running(raw_id),
-                        )
-                    });
                 let status = if is_running {
                     json!({ "type": "running" })
                 } else {

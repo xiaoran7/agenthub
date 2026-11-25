@@ -33,7 +33,7 @@ export function applyTheme(mode: ThemeMode): "light" | "dark" {
   if (typeof document !== "undefined") {
     document.documentElement.setAttribute("data-theme", resolved);
     document.documentElement.style.colorScheme = resolved;
-    const statusColor = resolved === "dark" ? "#161514" : "#faf8f5";
+    const statusColor = resolved === "dark" ? "#0f1110" : "#f7faf8";
     const metas = document.querySelectorAll('meta[name="theme-color"]');
     for (const meta of metas) {
       meta.setAttribute("content", statusColor);

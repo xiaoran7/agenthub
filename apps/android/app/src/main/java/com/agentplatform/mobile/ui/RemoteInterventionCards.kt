@@ -1,18 +1,26 @@
 package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -30,11 +38,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agentplatform.mobile.data.PendingApproval
 import com.agentplatform.mobile.data.PendingQuestion
+import com.agentplatform.mobile.data.optStringOrEmpty
+import org.json.JSONArray
 import org.json.JSONObject
 
 // =========================================================================
@@ -97,8 +110,9 @@ internal fun ApprovalCard(
     Surface(
         modifier = Modifier.widthIn(min = 280.dp, max = 440.dp),
         shape = RoundedCornerShape(OrcaRadius.card),
-        color = OrcaColors.accentAmber.copy(alpha = 0.08f),
-        border = BorderStroke(1.dp, OrcaColors.accentAmber.copy(alpha = 0.55f)),
+        color = OrcaColors.bgPanel,
+        border = BorderStroke(1.dp, OrcaColors.accentAmber.copy(alpha = 0.6f)),
+        shadowElevation = 2.dp,
     ) {
         Column(
             modifier = Modifier.padding(OrcaSpace.md),
@@ -142,7 +156,19 @@ internal fun ApprovalCard(
                 )
                 val diff = approval.diff
                 if (!diff.isNullOrBlank()) {
-                    AnimatedVisibility(visible = expanded) { DiffPreview(diff) }
+                    AnimatedVisibility(
+                        visible = expanded,
+                        enter =
+                            expandVertically(
+                                animationSpec = tween(MotionTokens.Standard),
+                                expandFrom = Alignment.Top,
+                            ) + fadeIn(tween(MotionTokens.Quick)),
+                        exit =
+                            shrinkVertically(
+                                animationSpec = tween(MotionTokens.Quick),
+                                shrinkTowards = Alignment.Top,
+                            ) + fadeOut(tween(MotionTokens.Quick)),
+                    ) { DiffPreview(diff) }
                 }
             }
             if (!approval.diff.isNullOrBlank()) {
@@ -175,13 +201,17 @@ internal fun normalizeDiffText(raw: String): String {
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
         val parsed = runCatching { JSONObject(trimmed) }.getOrNull()
         if (parsed != null) {
-            val oldStr = parsed.optString("old_string").ifEmpty { parsed.optString("oldText") }
-            val newStr = parsed.optString("new_string").ifEmpty { parsed.optString("newText") }
-            val content = parsed.optString("content")
+            val oldStr = parsed.optStringOrEmpty("old_string").ifEmpty { parsed.optStringOrEmpty("oldText") }
+            val newStr = parsed.optStringOrEmpty("new_string").ifEmpty { parsed.optStringOrEmpty("newText") }
+            val content = parsed.optStringOrEmpty("content")
             if (oldStr.isNotEmpty() || newStr.isNotEmpty()) {
                 val sb = StringBuilder()
-                oldStr.lines().forEach { sb.append("- ").append(it).append('\n') }
-                newStr.lines().forEach { sb.append("+ ").append(it).append('\n') }
+                if (oldStr.isNotEmpty()) {
+                    oldStr.lines().forEach { sb.append("- ").append(it).append('\n') }
+                }
+                if (newStr.isNotEmpty()) {
+                    newStr.lines().forEach { sb.append("+ ").append(it).append('\n') }
+                }
                 return sb.toString().trimEnd()
             }
             if (content.isNotEmpty()) {
@@ -192,16 +222,42 @@ internal fun normalizeDiffText(raw: String): String {
     return raw
 }
 
+private const val INITIAL_DIFF_LINES = 80
+private const val DIFF_PAGE_STEP = 240
+
 @Composable
 internal fun DiffPreview(diff: String) {
     val normalized = remember(diff) { normalizeDiffText(diff) }
     val allLines = remember(normalized) { normalized.lines() }
-    var showAll by remember(diff) { mutableStateOf(false) }
+    var visibleLimit by remember(diff) { mutableStateOf(INITIAL_DIFF_LINES) }
     val added = remember(allLines) { allLines.count { it.startsWith("+") && !it.startsWith("+++") } }
     val removed = remember(allLines) { allLines.count { it.startsWith("-") && !it.startsWith("---") } }
-    val visibleLines = if (showAll || allLines.size <= 80) allLines else allLines.take(80)
+    val visibleLines =
+        remember(allLines, visibleLimit) {
+            if (allLines.size <= visibleLimit) allLines else allLines.take(visibleLimit)
+        }
     val hiddenCount = (allLines.size - visibleLines.size).coerceAtLeast(0)
     val hScroll = rememberScrollState()
+    val defaultLineColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val addedLineColor = OrcaColors.accentGreen
+    val removedLineColor = OrcaColors.accentRed
+    val diffText =
+        remember(visibleLines, defaultLineColor, addedLineColor, removedLineColor) {
+            buildAnnotatedString {
+                visibleLines.forEachIndexed { index, line ->
+                    if (index > 0) append('\n')
+                    val color =
+                        when {
+                            line.startsWith("+") && !line.startsWith("+++") -> addedLineColor
+                            line.startsWith("-") && !line.startsWith("---") -> removedLineColor
+                            else -> defaultLineColor
+                        }
+                    withStyle(SpanStyle(color = color)) {
+                        append(line.ifEmpty { " " })
+                    }
+                }
+            }
+        }
 
     Column(
         modifier =
@@ -231,29 +287,19 @@ internal fun DiffPreview(diff: String) {
                 }
             }
         }
-        Column(
+        Text(
+            text = diffText,
+            style = OrcaType.code.copy(fontSize = 11.sp, lineHeight = 16.sp),
+            softWrap = false,
             modifier = Modifier.fillMaxWidth().horizontalScroll(hScroll),
-            verticalArrangement = Arrangement.spacedBy(1.dp),
-        ) {
-            visibleLines.forEach { line ->
-                val color =
-                    when {
-                        line.startsWith("+") && !line.startsWith("+++") -> OrcaColors.accentGreen
-                        line.startsWith("-") && !line.startsWith("---") -> OrcaColors.accentRed
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                Text(
-                    text = line.ifEmpty { " " },
-                    style = OrcaType.code.copy(fontSize = 11.sp),
-                    color = color,
-                    softWrap = false,
-                )
-            }
-        }
+        )
         if (hiddenCount > 0) {
+            val nextStep = minOf(hiddenCount, DIFF_PAGE_STEP)
             OrcaTextAction(
-                label = "展开剩余 $hiddenCount 行变更",
-                onClick = { showAll = true },
+                label =
+                    if (hiddenCount <= DIFF_PAGE_STEP) "展开剩余 $hiddenCount 行变更"
+                    else "再展开 $nextStep 行（共剩余 $hiddenCount 行）",
+                onClick = { visibleLimit += DIFF_PAGE_STEP },
             )
         }
     }
@@ -263,15 +309,14 @@ internal fun DiffPreview(diff: String) {
 internal fun QuestionCard(
     question: PendingQuestion,
     enabled: Boolean,
+    submitting: Boolean = false,
     onAnswer: (Any) -> Unit,
 ) {
     var picked by remember(question.questionId) { mutableStateOf(setOf<String>()) }
     var customAnswer by remember(question.questionId) { mutableStateOf("") }
-    var submitted by remember(question.questionId) { mutableStateOf(false) }
-    val interactionEnabled = enabled && !submitted
+    val interactionEnabled = enabled && !submitting
     val submitAnswer: (Any) -> Unit = { answer ->
-        if (!submitted && enabled) {
-            submitted = true
+        if (interactionEnabled) {
             onAnswer(answer)
         }
     }
@@ -461,3 +506,51 @@ private fun SelectionBox(selected: Boolean) {
         if (selected) OrcaCheckIcon(Color.White, 11.dp)
     }
 }
+
+@Composable
+internal fun RemoteInterventionRail(
+    approvals: List<PendingApproval>,
+    questions: List<PendingQuestion>,
+    enabled: Boolean,
+    submittingQuestionIds: Set<String>,
+    onResolveApproval: (PendingApproval, Boolean) -> Unit,
+    onAnswerQuestion: (PendingQuestion, Any) -> Unit,
+) {
+    if (approvals.isEmpty() && questions.isEmpty()) return
+    val uniqueApprovals = remember(approvals) { approvals.distinctBy { it.approvalId } }
+    val uniqueQuestions = remember(questions) { questions.distinctBy { it.questionId } }
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+    ) {
+        items(uniqueApprovals, key = { "approval:${it.approvalId}" }) { approval ->
+            ApprovalCard(
+                approval = approval,
+                enabled = enabled,
+                onApprove = { onResolveApproval(approval, true) },
+                onDecline = { onResolveApproval(approval, false) },
+            )
+        }
+        items(uniqueQuestions, key = { "question:${it.questionId}" }) { question ->
+            QuestionCard(
+                question = question,
+                enabled = enabled,
+                submitting = question.questionId in submittingQuestionIds,
+                onAnswer = { answer -> onAnswerQuestion(question, answer) },
+            )
+        }
+    }
+}
+
+internal fun resolveApprovalCommand(approvalId: String, approved: Boolean): JSONObject =
+    JSONObject()
+        .put("action", "resolve_approval")
+        .put("approval_id", approvalId)
+        .put("approved", approved)
+
+internal fun answerQuestionCommand(questionId: String, answer: Any): JSONObject =
+    JSONObject()
+        .put("action", "answer_question")
+        .put("question_id", questionId)
+        .put("answer", if (answer is List<*>) JSONArray(answer) else answer)

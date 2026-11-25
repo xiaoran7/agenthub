@@ -54,8 +54,8 @@ const sharedHead = [
   ),
   '<link rel="icon" type="image/x-icon" sizes="32x32" href="/favicon.ico" />',
   '<link rel="apple-touch-icon" href="/icon-192.png" />',
-  '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf8f5" />',
-  '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161514" />',
+  '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7faf8" />',
+  '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1110" />',
   // Applied before the first paint so the console never flashes the wrong
   // theme while React boots, loaded externally so CSP needs no 'unsafe-inline'.
   '<script src="/theme-init.js"></script>',

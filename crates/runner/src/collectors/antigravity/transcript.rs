@@ -24,10 +24,17 @@ pub(crate) fn resolve_brain_transcript_path(conv_dir: &Path) -> Option<PathBuf> 
     plain.is_file().then_some(plain)
 }
 
+pub(crate) fn is_safe_antigravity_session_id(raw_id: &str) -> bool {
+    validate_safe_session_id(raw_id) && raw_id != "." && !raw_id.contains(':')
+}
+
 pub(crate) fn resolve_brain_session_transcript(
     ag_home: &Path,
     session_id: &str,
 ) -> Option<PathBuf> {
+    if !is_safe_antigravity_session_id(session_id) {
+        return None;
+    }
     resolve_brain_transcript_path(&ag_home.join("brain").join(session_id))
 }
 

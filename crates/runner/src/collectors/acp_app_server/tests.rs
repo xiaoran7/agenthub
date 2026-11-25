@@ -114,8 +114,10 @@ fn normalizes_request_permission_with_edit_diff_and_redaction() {
     assert!(diff.contains("[local_path_redacted]"));
     assert!(!diff.contains("/Users/alice/token.txt"));
 
-    // Options cached in pending_permissions
-    let opts = permissions.get("105").expect("options saved");
+    // Options and verbatim JSON-RPC id cached in pending_permissions
+    let pending = permissions.get("105").expect("options saved");
+    assert_eq!(pending.raw_id, json!(105));
+    let opts = &pending.options;
     assert_eq!(opts.len(), 2);
     assert_eq!(opts[0].option_id, "opt-allow-1");
 
@@ -216,15 +218,19 @@ fn detect_acp_gateway_kind_identifies_codex_antigravity_and_claude() {
         Some(AcpGatewayKind::Codex)
     );
     assert_eq!(
-        detect_acp_gateway_kind(
-            Path::new("/usr/local/bin/acp-server"),
-            &["--agent".into(), "gemini".into()]
-        ),
+        detect_acp_gateway_kind(Path::new("/usr/local/bin/gemini-acp"), &[]),
         Some(AcpGatewayKind::Antigravity)
     );
     assert_eq!(
         detect_acp_gateway_kind(Path::new("C:/tools/claude-code-acp.exe"), &[]),
         Some(AcpGatewayKind::ClaudeCode)
+    );
+    assert_eq!(
+        detect_acp_gateway_kind(
+            Path::new("/usr/local/bin/acp-server"),
+            &["--cwd".into(), "/home/user/claude-project".into()]
+        ),
+        None
     );
     assert_eq!(
         detect_acp_gateway_kind(Path::new("/usr/local/bin/generic-acp"), &["--stdio".into()]),
@@ -289,11 +295,11 @@ fn configure_acp_gateway_env_with_injects_only_matching_profile() {
     assert!(!c_env.contains_key("ANTHROPIC_AUTH_TOKEN"));
     assert!(!c_env.contains_key("GEMINI_API_KEY"));
 
-    let mut anti_cmd = Command::new("acp");
+    let mut anti_cmd = Command::new("antigravity-acp");
     configure_acp_gateway_env_with(
         &mut anti_cmd,
-        Path::new("acp"),
-        &["--provider".into(), "antigravity".into()],
+        Path::new("antigravity-acp"),
+        &[],
         codex,
         anti,
         claude,
@@ -331,4 +337,69 @@ fn configure_acp_gateway_env_with_injects_only_matching_profile() {
         claude,
     );
     assert!(envs_of(&unknown_cmd).is_empty());
+}
+#[test]
+fn pending_permissions_are_bounded_and_cleaned_up_on_turn_completed() {
+    let mut pending_prompts = HashMap::new();
+    let mut pending_permissions = HashMap::new();
+    let mut active_turns = HashMap::new();
+    active_turns.insert("sess-a".to_owned(), "turn-a".to_owned());
+    active_turns.insert("sess-b".to_owned(), "turn-b".to_owned());
+
+    for i in 0..(protocol::MAX_PENDING_PERMISSIONS + 20) {
+        let sess = if i.is_multiple_of(2) {
+            "sess-a"
+        } else {
+            "sess-b"
+        };
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": i as u64,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": sess,
+                "toolCall": { "kind": "execute", "title": "run", "rawInput": { "command": "echo hi" } },
+                "options": [{ "optionId": "allow", "kind": "allow_once" }]
+            }
+        });
+        let _ = normalize_acp_message(
+            req,
+            &mut pending_prompts,
+            &mut pending_permissions,
+            &mut active_turns,
+        );
+    }
+    assert_eq!(pending_permissions.len(), protocol::MAX_PENDING_PERMISSIONS);
+
+    pending_prompts.insert(
+        999,
+        PendingPromptInfo {
+            turn_id: "turn-a".to_owned(),
+            session_id: "sess-a".to_owned(),
+        },
+    );
+    let done = json!({
+        "jsonrpc": "2.0",
+        "id": 999,
+        "result": { "stopReason": "end_turn" }
+    });
+    let out = normalize_acp_message(
+        done,
+        &mut pending_prompts,
+        &mut pending_permissions,
+        &mut active_turns,
+    );
+    assert!(out.iter().any(|v| v["method"] == "turn/completed"));
+    assert!(
+        pending_permissions
+            .values()
+            .all(|req| req.session_id != "sess-a"),
+        "completed session permissions must be cleaned up"
+    );
+    assert!(
+        pending_permissions
+            .values()
+            .any(|req| req.session_id == "sess-b"),
+        "other active session permissions must remain intact"
+    );
 }

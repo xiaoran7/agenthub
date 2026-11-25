@@ -22,17 +22,18 @@ impl DaemonRequestHandler for MockHandler {
 #[test]
 fn index_html_stamps_layout_once_and_versions_assets() {
     let html = render_index_html(4321, "test-csrf");
-    let stamped = html
-        .find("window.AppLayout = {")
-        .filter(|&i| {
-            // the daemon's object is JSON, keys unordered: any quoted key will do
-            html[i + "window.AppLayout = {".len()..].starts_with('"')
-        })
-        .expect("stamped layout");
-    let fallback = html
-        .find("window.AppLayout = Object.assign(")
-        .expect("fallback");
-    assert!(stamped < fallback);
+    let marker = r#"<script id="app-layout-data" type="application/json">{"#;
+    let stamped = html.find(marker).expect("stamped layout data tag");
+    assert_eq!(html.matches(marker).count(), 1);
+    assert!(
+        !html.contains("<script>"),
+        "index html must not contain inline executable <script> tags"
+    );
+    let script_tag = html
+        .find("/dashboard.js?v=")
+        .expect("external dashboard script");
+    assert!(stamped < script_tag);
+    assert!(dashboard_js_embedded().contains("app-layout-data"));
     assert!(html.contains(r#""webPort":4321"#));
     assert!(!html.contains("__ASSETS_VERSION__"));
     assert!(html.contains(&format!("/dashboard.css?v={ASSETS_VERSION}")));
@@ -57,8 +58,8 @@ fn index_html_stamps_layout_once_and_versions_assets() {
 
 #[test]
 fn dashboard_css_is_served_from_the_embedded_sheet() {
-    assert!(DASHBOARD_CSS.contains("--fs-body"));
-    assert!(!DASHBOARD_CSS.contains("</style>"));
+    assert!(dashboard_css_embedded().contains("--fs-body"));
+    assert!(!dashboard_css_embedded().contains("</style>"));
 }
 
 #[test]
@@ -66,11 +67,11 @@ fn dashboard_js_is_its_own_embedded_file() {
     // the page loads it, never inlines it: a `</script>` in the source
     // would end the tag early if the two were ever put back together
     assert!(!INDEX_HTML.contains("function renderSessions"));
-    assert!(DASHBOARD_JS.contains("function renderSessions"));
-    assert!(!DASHBOARD_JS.contains("</script>"));
+    assert!(dashboard_js_embedded().contains("function renderSessions"));
+    assert!(!dashboard_js_embedded().contains("</script>"));
     // one pricing authority: the daemon. The page must not carry rates.
-    assert!(!DASHBOARD_JS.contains("per 1M tokens"));
-    assert!(!DASHBOARD_JS.contains("fmtCostFromTokens"));
+    assert!(!dashboard_js_embedded().contains("per 1M tokens"));
+    assert!(!dashboard_js_embedded().contains("fmtCostFromTokens"));
 }
 
 #[test]
@@ -85,9 +86,9 @@ fn dashboard_assets_include_capabilities_ecosystem() {
     assert!(INDEX_HTML.contains("id=\"registerMcpModal\""));
     // the ecosystem reads as flat console rows, the same .row idiom as
     // every other page, not as a second card design
-    assert!(DASHBOARD_CSS.contains(".cap-row"));
-    assert!(DASHBOARD_JS.contains("function renderCapabilities"));
-    assert!(DASHBOARD_JS.contains("function submitRegisterMcp"));
+    assert!(dashboard_css_embedded().contains(".cap-row"));
+    assert!(dashboard_js_embedded().contains("function renderCapabilities"));
+    assert!(dashboard_js_embedded().contains("function submitRegisterMcp"));
 }
 
 #[test]
@@ -145,13 +146,13 @@ fn dashboard_usage_page_reads_the_ledger() {
         "exportLedgerCsv",
     ] {
         assert!(
-            DASHBOARD_JS.contains(&format!("function {fn_name}")),
+            dashboard_js_embedded().contains(&format!("function {fn_name}")),
             "{fn_name}"
         );
     }
-    assert!(DASHBOARD_JS.contains("/api/usage/ledger?period="));
+    assert!(dashboard_js_embedded().contains("/api/usage/ledger?period="));
     // the marks are the served files, never an inline redraw
-    assert!(DASHBOARD_JS.contains("/icons/${file}"));
+    assert!(dashboard_js_embedded().contains("/icons/${file}"));
 }
 
 #[test]
@@ -163,11 +164,11 @@ fn dashboard_agents_are_the_five_products() {
         "antigravity",
         "deepseek_harness",
     ] {
-        assert!(DASHBOARD_JS.contains(&format!("{id}:")), "{id}");
+        assert!(dashboard_js_embedded().contains(&format!("{id}:")), "{id}");
     }
     assert!(INDEX_HTML.contains("id=\"setTab-plugins\""));
     assert!(INDEX_HTML.contains("id=\"setPage-plugins\""));
-    assert!(DASHBOARD_JS.contains("function refreshPluginCatalog"));
+    assert!(dashboard_js_embedded().contains("function refreshPluginCatalog"));
 }
 
 #[test]
@@ -210,15 +211,23 @@ fn test_parse_path_and_query() {
     assert_eq!(query.get("after").map(String::as_str), Some("10"));
     assert_eq!(query.get("limit").map(String::as_str), Some("50"));
 
+    let (conv_path, conv_query) =
+        parse_path_and_query("/api/conversation?session_id=foo%2Fbar+baz%3A1&agent=claude");
+    assert_eq!(conv_path, "/api/conversation");
+    assert_eq!(
+        conv_query.get("session_id").map(String::as_str),
+        Some("foo/bar baz:1")
+    );
+
     let (path_plain, query_empty) = parse_path_and_query("/api/status");
     assert_eq!(path_plain, "/api/status");
     assert!(query_empty.is_empty());
 }
 
 fn extract_csrf_from_root(root_html: &str) -> String {
-    let marker = "window.AppLayout = ";
+    let marker = r#"<script id="app-layout-data" type="application/json">"#;
     let start = root_html.find(marker).expect("AppLayout in html") + marker.len();
-    let end = root_html[start..].find(";</script>").expect("end script") + start;
+    let end = root_html[start..].find("</script>").expect("end script") + start;
     let parsed: serde_json::Value =
         serde_json::from_str(&root_html[start..end]).expect("valid AppLayout json");
     parsed["csrfToken"]
@@ -575,4 +584,172 @@ fn oversized_content_length_returns_413_without_oom() {
     );
 
     stopped.store(true, Ordering::Relaxed);
+}
+
+#[test]
+fn cursor_paginated_events_endpoint_returns_json_instead_of_sse() {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let handler: Arc<dyn DaemonRequestHandler> = Arc::new(|request| match request {
+        DaemonRequest::GetEvents { after_cursor, .. } => {
+            DaemonResponse::Events(crate::remote_journal::EventsAfter::Events {
+                events: vec![],
+                cursor: after_cursor,
+            })
+        }
+        _ => DaemonResponse::Error {
+            code: "not_implemented".into(),
+        },
+    });
+    let config = WebServerConfig {
+        port: 14325,
+        open_browser: false,
+        identity_path: crate::device_name::default_identity_path(),
+    };
+    let port = serve(config, handler, stopped.clone()).expect("server should bind");
+    let agent = ureq::Agent::new_with_defaults();
+
+    let mut resp = agent
+        .get(&format!(
+            "http://127.0.0.1:{port}/api/events?after=42&limit=10"
+        ))
+        .header("Accept", "application/json")
+        .call()
+        .expect("cursor events request should succeed");
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.contains("application/json"),
+        "expected json response, got content-type: {content_type}"
+    );
+    let body: serde_json::Value = resp.body_mut().read_json().expect("valid json");
+    assert_eq!(body["type"], "events");
+    assert_eq!(body["result"]["cursor"], 42);
+
+    stopped.store(true, Ordering::Relaxed);
+}
+#[test]
+fn dashboard_cache_clears_ghost_sessions_once_store_is_ready_and_empty() {
+    let has_session = Arc::new(AtomicBool::new(true));
+    let flag = Arc::clone(&has_session);
+    let handler: Arc<dyn DaemonRequestHandler> = Arc::new(move |request| match request {
+        DaemonRequest::Discover => {
+            if flag.load(Ordering::Relaxed) {
+                DaemonResponse::Discovery(json!({
+                    "candidates": [{
+                        "provider_session_id": "claude_ghost-1",
+                        "provider": "claude_code",
+                        "workspace_path": "/tmp/ws"
+                    }]
+                }))
+            } else {
+                DaemonResponse::Discovery(json!({ "candidates": [] }))
+            }
+        }
+        DaemonRequest::GetStatus => DaemonResponse::Status {
+            host_generation: "gen-1".into(),
+            workspaces: vec![],
+            remote_enabled: false,
+            remote_connected: false,
+        },
+        _ => DaemonResponse::Error {
+            code: "not_implemented".into(),
+        },
+    });
+    let identity = crate::device_name::default_identity_path();
+    invalidate_dashboard_summary_cache();
+
+    let (bytes1, _) =
+        build_cached_dashboard_payload_with_store_ready(&handler, 44299, &identity, true);
+    let v1: serde_json::Value = serde_json::from_slice(&bytes1).unwrap();
+    assert_eq!(v1["stats"]["total_sessions"], 1);
+
+    // Delete last session; while store is still loading, previous cached session is kept.
+    has_session.store(false, Ordering::Relaxed);
+    let (bytes_loading, _) =
+        build_cached_dashboard_payload_with_store_ready(&handler, 44298, &identity, false);
+    let v_loading: serde_json::Value = serde_json::from_slice(&bytes_loading).unwrap();
+    assert_eq!(v_loading["stats"]["total_sessions"], 1);
+    assert_eq!(v_loading["sessions_loading"], true);
+
+    // Once store is ready and returns 0 sessions, cache must clear and serve empty list.
+    let (bytes2, _) =
+        build_cached_dashboard_payload_with_store_ready(&handler, 44297, &identity, true);
+    let v2: serde_json::Value = serde_json::from_slice(&bytes2).unwrap();
+    assert_eq!(v2["stats"]["total_sessions"], 0);
+    assert!(v2["sessions"].as_array().unwrap().is_empty());
+    invalidate_dashboard_summary_cache();
+}
+
+#[test]
+fn http_server_rejects_duplicate_security_headers_and_enforces_slowloris_deadline() {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let handler: Arc<dyn DaemonRequestHandler> = Arc::new(MockHandler);
+    let config = WebServerConfig {
+        port: 14326,
+        open_browser: false,
+        identity_path: crate::device_name::default_identity_path(),
+    };
+    let port = serve(config, handler, stopped.clone()).expect("server should bind");
+
+    // Duplicate `Host` header must be rejected with 400 Bad Request.
+    let mut dup = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    dup.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    write!(
+        dup,
+        "GET /api/status HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nHost: evil.example\r\n\r\n"
+    )
+    .unwrap();
+    dup.flush().unwrap();
+    let mut resp = String::new();
+    dup.read_to_string(&mut resp).unwrap();
+    assert!(
+        resp.starts_with("HTTP/1.1 400"),
+        "expected 400 on duplicate Host header, got: {resp}"
+    );
+
+    // Non-empty Transfer-Encoding must be rejected with 501 Not Implemented.
+    let mut te = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    te.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    write!(
+        te,
+        "POST /api/status HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nTransfer-Encoding: chunked\r\n\r\n"
+    )
+    .unwrap();
+    te.flush().unwrap();
+    let mut resp_te = String::new();
+    te.read_to_string(&mut resp_te).unwrap();
+    assert!(
+        resp_te.starts_with("HTTP/1.1 501"),
+        "expected 501 on Transfer-Encoding, got: {resp_te}"
+    );
+
+    stopped.store(true, Ordering::Relaxed);
+
+    // Slowloris deadline check directly on `read_bounded_line`: trickle bytes slower than deadline.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let client_thread = std::thread::spawn(move || {
+        let mut c = TcpStream::connect(addr).unwrap();
+        let _ = c.write_all(b"GET ");
+        let _ = c.flush();
+        std::thread::sleep(Duration::from_millis(80));
+        let _ = c.write_all(b"/slow ");
+        let _ = c.flush();
+        std::thread::sleep(Duration::from_millis(300));
+    });
+    let (server_stream, _) = listener.accept().unwrap();
+    let mut reader = BufReader::new(server_stream);
+    let start = Instant::now();
+    let err = read_bounded_line(
+        &mut reader,
+        MAX_HTTP_LINE_BYTES,
+        Instant::now() + Duration::from_millis(160),
+    )
+    .expect_err("slowloris request line must time out at cumulative deadline");
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    let _ = client_thread.join();
 }

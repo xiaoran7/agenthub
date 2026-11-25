@@ -651,3 +651,187 @@ fn usage_index_db_spills_queries_and_incrementally_vacuums() {
     assert_eq!(db.freelist_count().unwrap(), 0);
     fs::remove_dir_all(&dir).ok();
 }
+#[test]
+fn active_claude_session_over_40_turns_stays_incremental_without_pruned_flag() {
+    let dir = tempdir();
+    let path = dir.join("active-45.jsonl");
+    let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+    let mut content = String::new();
+    for i in 0..45 {
+        content.push_str(&format!(
+            r#"{{"type":"assistant","timestamp":"{now_rfc3339}","sessionId":"sess-45","requestId":"req-{i}","message":{{"id":"msg-{i}","model":"claude-sonnet-4-6","usage":{{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+        ));
+        content.push('\n');
+    }
+    fs::write(&path, &content).unwrap();
+
+    let mut state = TranscriptState {
+        modified_ms: chrono::Utc::now().timestamp_millis(),
+        default_agent: "claude_code",
+        ..TranscriptState::default()
+    };
+    read_transcript_incremental(&path, &mut state, &HashMap::new()).unwrap();
+    assert_eq!(state.calls.len(), 45);
+    assert!(state.index.len() <= 32, "sliding window should bound index");
+    assert!(
+        !state.index_pruned,
+        "active >32 turn session must not set index_pruned"
+    );
+
+    // Append turn 46 + streaming update for turn 46: must remain incremental and deduplicated.
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"assistant","timestamp":"{now_rfc3339}","sessionId":"sess-45","requestId":"req-45","message":{{"id":"msg-45","model":"claude-sonnet-4-6","usage":{{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+    )
+    .unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"assistant","timestamp":"{now_rfc3339}","sessionId":"sess-45","requestId":"req-45","message":{{"id":"msg-45","model":"claude-sonnet-4-6","usage":{{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+    )
+    .unwrap();
+    drop(f);
+
+    read_transcript_incremental(&path, &mut state, &HashMap::new()).unwrap();
+    assert_eq!(state.calls.len(), 46);
+    assert_eq!(state.calls.last().unwrap().output, 50);
+    assert!(!state.index_pruned);
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn today_digest_preserves_53_week_heatmap_activity() {
+    let now = chrono::Local::now().timestamp_millis();
+    let forty_days_ago = now - 40 * 86_400_000;
+    let old_rec = record(forty_days_ago, "claude_code", "claude-sonnet-5", 2_000, 200);
+    let today_rec = record(now, "claude_code", "claude-opus-5", 1_000, 100);
+
+    let d = digest(&[today_rec, old_rec], Period::Today, 10);
+    assert_eq!(d.calls, 1, "Today totals must count only Today calls");
+    assert_eq!(
+        d.heat.len(),
+        2,
+        "Today digest must still carry prior-month activity in 53-week heatmap"
+    );
+    let old_day = local_day(forty_days_ago);
+    assert!(d.heat.iter().any(|p| p.date == old_day && p.calls == 1));
+}
+
+#[test]
+fn truncated_trailing_claude_line_tracks_seen_len_until_completed() {
+    let dir = tempdir();
+    let path = dir.join("partial.jsonl");
+    let ts = chrono::Utc::now().to_rfc3339();
+    let complete = format!(
+        r#"{{"type":"assistant","timestamp":"{ts}","sessionId":"s-part","requestId":"r1","message":{{"id":"m1","model":"claude-sonnet-4-6","usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+    );
+    let partial = format!(
+        r#"{{"type":"assistant","timestamp":"{ts}","sessionId":"s-part","requestId":"r2","message":{{"id":"m2","model":"claude-sonnet-4-6","usage":{{"input_tokens":20"#
+    );
+    fs::write(&path, format!("{complete}\n{partial}")).unwrap();
+    let len_with_partial = fs::metadata(&path).unwrap().len();
+
+    let mut state = TranscriptState {
+        modified_ms: chrono::Utc::now().timestamp_millis(),
+        default_agent: "claude_code",
+        ..TranscriptState::default()
+    };
+    read_transcript_incremental(&path, &mut state, &HashMap::new()).unwrap();
+    assert_eq!(state.calls.len(), 1);
+    assert!(state.offset < len_with_partial);
+    assert_eq!(state.seen_len, len_with_partial);
+
+    // Finish the truncated trailing line and re-read incrementally.
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(
+        f,
+        r#","output_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+    )
+    .unwrap();
+    drop(f);
+    let final_len = fs::metadata(&path).unwrap().len();
+    read_transcript_incremental(&path, &mut state, &HashMap::new()).unwrap();
+    assert_eq!(state.calls.len(), 2);
+    assert_eq!(state.offset, final_len);
+    assert_eq!(state.seen_len, final_len);
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn dirty_db_removals_prevent_cold_resurrection_and_retry_on_walk() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    forget_transcripts();
+
+    let dir = tempdir();
+    let db_path = dir.join("usage_index.db");
+    let _guard = set_test_index_db(Some(db_path.clone()));
+
+    let kept_file = dir.join("kept-cold.jsonl");
+    let deleted_file = dir.join("deleted-cold.jsonl");
+    let old_t = 1_700_000_000_000i64;
+    let mut kept_rec = record(old_t, "claude_code", "claude-sonnet-5", 100, 20);
+    kept_rec.session = intern("kept_sess");
+    let mut deleted_rec = record(old_t + 1_000, "claude_code", "claude-sonnet-5", 200, 40);
+    deleted_rec.session = intern("deleted_sess");
+
+    let mut db = UsageIndexDb::open(&db_path).unwrap();
+    db.upsert_files(&[
+        ColdSpillItem {
+            path: kept_file.clone(),
+            source: "claude",
+            file_len: 100,
+            modified_ms: old_t,
+            records: vec![kept_rec],
+        },
+        ColdSpillItem {
+            path: deleted_file.clone(),
+            source: "claude",
+            file_len: 100,
+            modified_ms: old_t,
+            records: vec![deleted_rec],
+        },
+    ])
+    .unwrap();
+    assert_eq!(db.row_count().unwrap(), 2);
+    drop(db);
+
+    {
+        let mut cache = ledger_cache().write().unwrap();
+        cache.cold_loaded = true;
+        cache.walked_at = Some(Instant::now() - Duration::from_secs(10));
+        cache.cold_manifest.insert(
+            kept_file.clone(),
+            IndexedFileMeta {
+                source: "claude".to_owned(),
+                file_len: 100,
+                modified_ms: old_t,
+                min_t: Some(old_t),
+                max_t: Some(old_t),
+            },
+        );
+        cache.recompute_cold_max_t();
+        cache.dirty_db_removals.insert(deleted_file.clone());
+    }
+
+    // Cold query must exclude pending `dirty_db_removals` so deleted rows never resurrect.
+    let (recs, cold_ok) = cache::collect_windowed_records(i64::MIN);
+    assert!(cold_ok);
+    assert!(recs.iter().any(|r| r.session.as_ref() == "kept_sess"));
+    assert!(
+        !recs.iter().any(|r| r.session.as_ref() == "deleted_sess"),
+        "pending dirty_db_removals must never resurrect from SQLite"
+    );
+
+    // Compact/spill must retry and clear `dirty_db_removals` from SQLite.
+    compact_and_spill_cold();
+    assert!(ledger_cache().read().unwrap().dirty_db_removals.is_empty());
+    let db = UsageIndexDb::open_read_only(&db_path).unwrap();
+    let remaining = db.query_records_since(i64::MIN, &HashSet::new()).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].session.as_ref(), "kept_sess");
+
+    forget_transcripts();
+    fs::remove_dir_all(&dir).ok();
+}

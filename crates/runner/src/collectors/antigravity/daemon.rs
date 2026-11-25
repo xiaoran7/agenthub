@@ -15,6 +15,7 @@ use super::{
 use crate::collectors::{BoundedLruCache, CollectorError};
 
 const DAEMON_RPC_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_DAEMON_RPC_BODY_BYTES: u64 = 64 * 1024 * 1024;
 const LIVE_TRAJECTORIES_TTL: Duration = Duration::from_secs(3);
 const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(5);
 
@@ -84,7 +85,15 @@ pub fn call_daemon_rpc(
             source: std::io::Error::other(err.to_string()),
         })?;
     let status = resp.status().as_u16();
-    let body_text = resp.body_mut().read_to_string().unwrap_or_default();
+    let body_text = resp
+        .body_mut()
+        .with_config()
+        .limit(MAX_DAEMON_RPC_BODY_BYTES)
+        .read_to_string()
+        .map_err(|err| CollectorError::Io {
+            program: program.clone(),
+            source: std::io::Error::other(err.to_string()),
+        })?;
     if status != 200 {
         return Err(CollectorError::Protocol {
             program,
@@ -439,7 +448,7 @@ pub fn respond_daemon_interaction(
                 })
                 .unwrap_or_default();
             interaction["askQuestion"] = json!({
-                "cancelled": false,
+                "cancelled": !approved,
                 "responses": [{
                     "question": "",
                     "options": [{ "text": answer_text }]

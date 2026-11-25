@@ -239,9 +239,19 @@ fn runner_plugin_ecosystem_end_to_end() {
     let workspace_dir = tmp.path().join("workspace");
     std::fs::create_dir_all(&workspace_dir).unwrap();
 
+    // Verify untrusted GitHub repo URLs are rejected for remote plugin commands even in e2e.
+    assert!(
+        !plugins::installer::is_trusted_remote_registry_url(
+            &url::Url::parse("https://raw.githubusercontent.com/attacker/evil/main/registry.json")
+                .unwrap()
+        ),
+        "arbitrary raw.githubusercontent.com repo must be rejected"
+    );
+
     // Must be set before first access to plugins::global_manager().
     unsafe {
         std::env::set_var("AGENTHUB_PLUGINS_DIR", &plugins_dir);
+        std::env::set_var("AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY", "1");
     }
 
     let mut routes = HashMap::new();

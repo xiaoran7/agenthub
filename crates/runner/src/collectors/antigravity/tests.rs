@@ -368,3 +368,137 @@ fn normalizes_antigravity_generic_tool_outputs_and_edit_diffs() {
     assert_eq!(normalized[3]["role"], "assistant");
     assert_eq!(normalized[3]["content"], "Done updating `src/main.rs`.");
 }
+#[test]
+fn rejects_unsafe_session_ids_in_detail_and_transcript_lookup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ag_home = tmp.path().join(".gemini").join("antigravity");
+    let outside_logs = tmp
+        .path()
+        .join("outside")
+        .join(".system_generated")
+        .join("logs");
+    fs::create_dir_all(&outside_logs).unwrap();
+    fs::write(outside_logs.join("transcript.jsonl"), "{}\n").unwrap();
+
+    for bad_id in [
+        "../outside",
+        "../../outside",
+        ".",
+        "/etc/passwd",
+        "conv:evil",
+        "",
+    ] {
+        assert!(
+            resolve_brain_session_transcript(&ag_home, bad_id).is_none(),
+            "unsafe id `{bad_id}` must be rejected"
+        );
+        assert!(
+            find_antigravity_session_detail(bad_id).unwrap().is_none(),
+            "unsafe detail id `{bad_id}` must return Ok(None)"
+        );
+        assert!(
+            find_antigravity_session_detail(&format!("antigravity_{bad_id}"))
+                .unwrap()
+                .is_none(),
+            "prefixed unsafe detail id `{bad_id}` must return Ok(None)"
+        );
+    }
+}
+#[test]
+fn daemon_turn_distinguishes_not_found_from_rpc_errors_and_handles_canceled_steps() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    assert!(daemon_turn::is_terminal_step_status(
+        "CORTEX_STEP_STATUS_DONE"
+    ));
+    assert!(daemon_turn::is_terminal_step_status(
+        "CORTEX_STEP_STATUS_CANCELED"
+    ));
+    assert!(daemon_turn::is_terminal_step_status("CANCELLED"));
+    assert!(daemon_turn::is_terminal_step_status("SKIPPED"));
+    assert!(daemon_turn::is_terminal_step_status("ABORTED"));
+    assert!(!daemon_turn::is_terminal_step_status(
+        "CORTEX_STEP_STATUS_RUNNING"
+    ));
+
+    assert!(daemon_turn::is_rpc_not_found(&CollectorError::Protocol {
+        program: "test".to_owned(),
+        code: "http_404".to_owned(),
+        message: "not found".to_owned(),
+    }));
+    assert!(!daemon_turn::is_rpc_not_found(&CollectorError::Protocol {
+        program: "test".to_owned(),
+        code: "http_500".to_owned(),
+        message: "internal".to_owned(),
+    }));
+
+    // Loopback mock server: 1st request returns 404 (NotFound -> Ok(None)),
+    // 2nd returns 500 (transient error -> Err), 3rd returns 200 with step count.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let responses = [
+            (
+                "404 Not Found",
+                "application/json",
+                r#"{"code":"not_found"}"#,
+            ),
+            ("500 Internal Server Error", "text/plain", "busy"),
+            (
+                "200 OK",
+                "application/json",
+                r#"{"numTotalSteps":3,"status":"RUNNING"}"#,
+            ),
+        ];
+        for (status, ctype, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    let ep = AntigravityDaemonEndpoint {
+        http_port: port,
+        csrf_token: "test-csrf".to_owned(),
+    };
+    assert_eq!(
+        daemon_turn::query_step_count_and_status(&ep, "cid-404").unwrap(),
+        None
+    );
+    assert!(
+        daemon_turn::query_step_count_and_status(&ep, "cid-500").is_err(),
+        "HTTP 500 must return Err rather than silently falling back to None"
+    );
+    assert_eq!(
+        daemon_turn::query_step_count_and_status(&ep, "cid-200").unwrap(),
+        Some((3, "RUNNING".to_owned()))
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn antigravity_process_start_fails_fast_on_invalid_resume_session_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = AntigravityProcessSession::start(
+        tmp.path().join("nonexistent-agy"),
+        tmp.path(),
+        Some("../bad-session"),
+        TurnOptions::default(),
+    )
+    .err()
+    .expect("invalid resume_session_id must fail fast");
+    assert!(
+        matches!(err, CollectorError::Protocol { ref code, .. } if code == "invalid_session_id"),
+        "expected invalid_session_id protocol error, got: {err:?}"
+    );
+}

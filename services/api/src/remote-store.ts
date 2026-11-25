@@ -3,37 +3,31 @@ import { dirname } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
-  parseRemoteBinding,
-  parseRemoteReady,
   type AgentPlugin,
   type RemoteBinding,
   type RemoteCommand,
   type RemotePluginsResponse,
-  type RemoteReady,
 } from "@agent-pulse/contracts";
 import {
   normalizePluginList,
   queryRunnerPluginsResponse,
-  updateSingleRunnerPluginStatus,
   upsertRunnerPluginsRow,
 } from "./remote-plugins.js";
+import {
+  findRemoteResumePoint,
+  migrateRemoteStoreSchema,
+  receiveRemoteFrame,
+  type CachedRunnerHello,
+  type RemoteIngestContext,
+} from "./remote-store-ingest.js";
 import {
   REMOTE_STORE_SCHEMA,
   RUNNER_HELLO_LIST_FIELDS,
   RemoteStoreError,
   commandDigest,
-  dehydrateRemoteCommandBody,
   isSameProviderRebind,
   isWorkspaceAuthorizedInHello,
-  parseRemoteReceipt,
   projectRunnerHello,
-  requireOnlyKeys,
-  storableFrame,
-  validateRemoteApprovalEvent,
-  validateRemoteEventFields,
-  validateRemoteEventRaw,
-  validateRemoteMetaFrame,
-  validateRemoteQuestionEvent,
 } from "./remote-store-validation.js";
 
 export { RUNNER_HELLO_LIST_FIELDS, RemoteStoreError, projectRunnerHello };
@@ -48,11 +42,6 @@ export interface ContentEvent {
   payload: Record<string, unknown>;
 }
 
-type CachedRunnerHello = {
-  owner: string;
-  full: Record<string, unknown> | null;
-  thin: Record<string, unknown> | null;
-};
 const BINDING_INSERT_COLUMNS = 5;
 const BINDING_INSERT_PARAMETER_LIMIT = 32_000;
 const SNAPSHOT_LOOKBACK = 2000;
@@ -83,7 +72,7 @@ export class RemoteContentStore {
     }
     this.db = new DatabaseSync(path);
     this.db.exec(REMOTE_STORE_SCHEMA);
-    this.migrateCommandHub();
+    migrateRemoteStoreSchema(this.db);
   }
 
   private stmt(sql: string): StatementSync {
@@ -93,36 +82,6 @@ export class RemoteContentStore {
       this.statements.set(sql, cached);
     }
     return cached;
-  }
-
-  private migrateCommandHub(): void {
-    const columns = this.db
-      .prepare("PRAGMA table_info(remote_commands)")
-      .all() as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "hub")) {
-      this.db.exec("ALTER TABLE remote_commands ADD COLUMN hub TEXT");
-      const rows = this.db
-        .prepare("SELECT body FROM remote_commands")
-        .all() as Array<{ body: string }>;
-      const backfill = this.db.prepare(
-        "UPDATE remote_commands SET hub=? WHERE body=?",
-      );
-      for (const row of rows) {
-        let hub: string | null = null;
-        try {
-          hub = (JSON.parse(row.body) as RemoteCommand).hub_session_id ?? null;
-        } catch {
-          // leave null on unparseable rows
-        }
-        backfill.run(hub, row.body);
-      }
-    }
-    if (!columns.some((column) => column.name === "cmd_digest")) {
-      this.db.exec("ALTER TABLE remote_commands ADD COLUMN cmd_digest TEXT");
-    }
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS remote_command_session ON remote_commands(runner,hub,seq)",
-    );
   }
 
   saveRunnerPlugins(
@@ -142,8 +101,21 @@ export class RemoteContentStore {
     this.notify(owner);
   }
 
-  deleteRunnerPlugins(runner: string): void {
+  deleteRunnerPlugins(runner: string, expectedOwner?: string): void {
+    if (expectedOwner !== undefined) {
+      this.stmt(
+        "DELETE FROM remote_runner_plugins WHERE runner=? AND owner=?",
+      ).run(runner, expectedOwner);
+      return;
+    }
     this.stmt("DELETE FROM remote_runner_plugins WHERE runner=?").run(runner);
+  }
+
+  runnerOwner(runner: string): string | undefined {
+    const row = this.stmt(
+      "SELECT owner FROM remote_runners WHERE runner=?",
+    ).get(runner) as { owner: string } | undefined;
+    return row ? String(row.owner) : undefined;
   }
 
   onPluginChange(listener: RemotePluginChangeListener): () => void {
@@ -305,10 +277,21 @@ export class RemoteContentStore {
 
   deviceNames(owner: string): Map<string, string> {
     const names = new Map<string, string>();
-    for (const runner of this.thinRunners(owner)) {
-      const name = runner.hello?.device_name;
-      if (typeof name === "string" && name.trim() !== "") {
-        names.set(runner.runner_id, name.trim());
+    const rows = this.stmt(
+      "SELECT runner, device_name FROM remote_runners WHERE owner=? ORDER BY runner",
+    ).all(owner) as Array<{ runner: string; device_name: string | null }>;
+    for (const row of rows) {
+      const id = String(row.runner);
+      const entry = this.loadRunnerHelloEntry(id);
+      const helloName =
+        entry && entry.owner === owner ? entry.thin?.device_name : undefined;
+      if (typeof helloName === "string" && helloName.trim() !== "") {
+        names.set(id, helloName.trim());
+      } else if (
+        typeof row.device_name === "string" &&
+        row.device_name.trim() !== ""
+      ) {
+        names.set(id, row.device_name.trim());
       }
     }
     return names;
@@ -317,25 +300,32 @@ export class RemoteContentStore {
   recordDeviceName(owner: string, runner: string, deviceName: string): void {
     const trimmed = deviceName.trim();
     if (!trimmed) return;
+    this.register(owner, runner);
     this.stmt(
-      "INSERT OR IGNORE INTO remote_runners(runner,owner) VALUES (?,?)",
-    ).run(runner, owner);
+      "UPDATE remote_runners SET device_name=? WHERE runner=? AND owner=?",
+    ).run(trimmed, runner, owner);
     const row = this.stmt(
-      "SELECT hello FROM remote_runners WHERE runner=?",
-    ).get(runner) as { hello: string | null } | undefined;
-    let helloObj: Record<string, unknown> = {};
+      "SELECT hello FROM remote_runners WHERE runner=? AND owner=?",
+    ).get(runner, owner) as { hello: string | null } | undefined;
     if (row?.hello) {
       try {
-        helloObj = JSON.parse(String(row.hello)) as Record<string, unknown>;
+        const helloObj = JSON.parse(String(row.hello)) as Record<
+          string,
+          unknown
+        >;
+        if (
+          typeof helloObj.host_generation === "string" &&
+          helloObj.host_generation.trim() !== ""
+        ) {
+          helloObj.device_name = trimmed;
+          this.stmt(
+            "UPDATE remote_runners SET hello=? WHERE runner=? AND owner=?",
+          ).run(JSON.stringify(helloObj), runner, owner);
+        }
       } catch {
-        helloObj = {};
+        // leave malformed hello untouched
       }
     }
-    helloObj.device_name = trimmed;
-    this.stmt("UPDATE remote_runners SET hello=? WHERE runner=?").run(
-      JSON.stringify(helloObj),
-      runner,
-    );
     this.runnerHelloCache.delete(runner);
   }
 
@@ -397,11 +387,14 @@ export class RemoteContentStore {
         }
         if (addressedTo !== generation) staleSeqs.push(Number(row.seq));
       }
-      if (staleSeqs.length > 0) {
-        const placeholders = staleSeqs.map(() => "?").join(",");
-        this.stmt(
-          `DELETE FROM remote_commands WHERE runner=? AND seq IN (${placeholders})`,
-        ).run(runner, ...staleSeqs);
+      for (let offset = 0; offset < staleSeqs.length; offset += 500) {
+        const batch = staleSeqs.slice(offset, offset + 500);
+        const placeholders = batch.map(() => "?").join(",");
+        this.db
+          .prepare(
+            `DELETE FROM remote_commands WHERE runner=? AND seq IN (${placeholders})`,
+          )
+          .run(runner, ...batch);
       }
       const maxRow = this.stmt(
         "SELECT COALESCE(MAX(seq),0) AS seq FROM remote_commands WHERE runner=?",
@@ -460,7 +453,7 @@ export class RemoteContentStore {
     after: number,
   ): Array<{ seq: number; command: RemoteCommand }> {
     return this.stmt(
-      "SELECT seq,body FROM remote_commands WHERE runner=? AND seq>? ORDER BY seq LIMIT 128",
+      "SELECT seq,body FROM remote_commands WHERE runner=? AND seq>? AND receipt IS NULL ORDER BY seq LIMIT 128",
     )
       .all(runner, after)
       .map((row) => ({
@@ -535,233 +528,31 @@ export class RemoteContentStore {
     payload: Record<string, unknown>,
     activeGeneration?: string,
   ): number {
-    this.register(owner, runner);
-    let committedCount: number | undefined;
-    let helloMutated = false;
-    try {
-      const receivedWatermark = this.transaction(() => {
-        const watermarks = this.watermarks(runner);
-        if (!Number.isSafeInteger(seq) || seq < 1)
-          throw new RemoteStoreError("invalid_sequence");
-        if (seq <= watermarks.received) {
-          const old = this.stmt(
-            "SELECT payload FROM remote_events WHERE runner=? AND runner_seq=?",
-          ).get(runner, seq);
-          if (
-            !old ||
-            !isDeepStrictEqual(
-              JSON.parse(String(old.payload)),
-              storableFrame(payload),
-            )
-          )
-            throw new RemoteStoreError("sequence_conflict");
-          return watermarks.received;
-        }
-        if (seq !== watermarks.received + 1)
-          throw new RemoteStoreError("sequence_gap");
-        let binding: RemoteBinding | undefined;
-        let hub: string | null = null;
-        if (payload.type === "event") {
-          requireOnlyKeys(payload, ["type", "event"], "invalid_event");
-          const event = payload.event as Record<string, unknown> | undefined;
-          if (!event || typeof event !== "object" || Array.isArray(event))
-            throw new RemoteStoreError("invalid_event");
-          requireOnlyKeys(
-            event,
-            [
-              "event_id",
-              "host_generation",
-              "binding",
-              "hub_session_id",
-              "provider_session_id",
-              "kind",
-              "raw",
-              "approval_id",
-              "approval",
-              "question_id",
-              "question",
-            ],
-            "invalid_event",
-          );
-          validateRemoteEventFields(event);
-          const isApprovalEvent =
-            event.kind === "approval_requested" ||
-            event.kind === "approval_resolved" ||
-            event.kind === "unsupported_provider_request";
-          const isQuestionEvent =
-            event.kind === "question_requested" ||
-            event.kind === "question_resolved";
-          if (isApprovalEvent) validateRemoteApprovalEvent(event);
-          if (isQuestionEvent) validateRemoteQuestionEvent(event);
-          validateRemoteEventRaw(event, isApprovalEvent || isQuestionEvent);
-          if (event.binding) binding = parseRemoteBinding(event.binding);
-          hub =
-            typeof event.hub_session_id === "string"
-              ? event.hub_session_id
-              : null;
-          if (binding && hub !== binding.hub_session_id)
-            throw new RemoteStoreError("binding_conflict");
-          if (
-            binding &&
-            activeGeneration !== undefined &&
-            binding.host_generation !== activeGeneration
-          )
-            binding = undefined;
-        } else if (payload.type === "receipt") {
-          const receipt = parseRemoteReceipt(payload.receipt);
-          const queued = this.stmt(
-            "SELECT body FROM remote_commands WHERE runner=? AND cmd_id=?",
-          ).get(runner, receipt.client_cmd_id);
-          if (!queued) throw new RemoteStoreError("unknown_command_receipt");
-          const rawBody = String(queued.body);
-          const command = JSON.parse(rawBody) as RemoteCommand;
-          if (receipt.hub_session_id !== command.hub_session_id)
-            throw new RemoteStoreError("receipt_session_conflict");
-          hub = command.hub_session_id;
-          if (receipt.result?.binding) binding = receipt.result.binding;
-          if (binding && binding.hub_session_id !== hub)
-            throw new RemoteStoreError("binding_conflict");
-          if (
-            binding &&
-            activeGeneration !== undefined &&
-            binding.host_generation !== activeGeneration
-          )
-            binding = undefined;
-          const dehydrated = dehydrateRemoteCommandBody(rawBody);
-          this.stmt(
-            "UPDATE remote_commands SET receipt=?, body=? WHERE runner=? AND cmd_id=?",
-          ).run(
-            JSON.stringify(receipt),
-            dehydrated,
-            runner,
-            receipt.client_cmd_id,
-          );
-        } else if (payload.type === "ready") {
-          let ready: RemoteReady;
-          try {
-            ready = parseRemoteReady(payload);
-          } catch {
-            throw new RemoteStoreError("invalid_ready");
-          }
-          const sessions = ready.sessions;
-          if (
-            activeGeneration === undefined ||
-            ready.host_generation === activeGeneration
-          ) {
-            const existing = this.runnerBindings(owner, runner);
-            const currentHubs = new Set(
-              sessions.map((session) => session.hub_session_id),
-            );
-            const updates: RemoteBinding[] = [];
-            for (const binding of existing.values()) {
-              if (!currentHubs.has(binding.hub_session_id))
-                updates.push({
-                  ...binding,
-                  control_connected: false,
-                  execution_state: "unknown",
-                  current_turn_id: null,
-                });
-            }
-            for (const session of sessions) {
-              this.assertNativeIdentity(existing, session);
-              updates.push(session);
-            }
-            this.writeBindings(owner, runner, updates);
-            this.stmt("UPDATE remote_runners SET hello=? WHERE runner=?").run(
-              JSON.stringify(payload),
-              runner,
-            );
-            if ("plugins" in payload) {
-              upsertRunnerPluginsRow(
-                (sql) => this.stmt(sql),
-                owner,
-                runner,
-                undefined,
-                normalizePluginList(payload.plugins, runner),
-              );
-              this.notifyPlugins(owner, runner);
-            }
-            helloMutated = true;
-          }
-        } else if (payload.type === "plugin_status") {
-          validateRemoteMetaFrame(payload);
-          const pluginId = String(payload.plugin_id);
-          const runtimeStatus = String(
-            payload.runtime_status ?? "idle",
-          ) as AgentPlugin["runtimeStatus"];
-          const err =
-            typeof payload.error === "string" ? payload.error : undefined;
-          updateSingleRunnerPluginStatus(
-            (sql) => this.stmt(sql),
-            owner,
-            runner,
-            pluginId,
-            runtimeStatus,
-            err,
-          );
-        } else {
-          validateRemoteMetaFrame(payload);
-        }
-        if (binding) this.saveBinding(owner, runner, binding);
-        if (
-          payload.type === "host_lost" &&
-          (activeGeneration === undefined ||
-            payload.host_generation === activeGeneration)
-        ) {
-          const existing = this.runnerBindings(owner, runner);
-          this.writeBindings(
-            owner,
-            runner,
-            [...existing.values()].map((binding) => ({
-              ...binding,
-              control_connected: false,
-              execution_state: "unknown",
-            })),
-          );
-        }
-        this.stmt(
-          "INSERT INTO remote_events(owner,runner,runner_seq,hub,payload) VALUES (?,?,?,?,?)",
-        ).run(owner, runner, seq, hub, JSON.stringify(storableFrame(payload)));
-        let count = this.runnerEventCounts.get(runner);
-        if (count === undefined) {
-          const row = this.stmt(
-            "SELECT COUNT(*) AS cnt FROM remote_events WHERE runner=?",
-          ).get(runner) as { cnt: number } | undefined;
-          count = Number(row?.cnt ?? 0);
-        } else {
-          count += 1;
-        }
-        if (count > this.retention) {
-          const excess = count - this.retention;
-          const deleted = this.stmt(
-            "DELETE FROM remote_events WHERE id IN (SELECT id FROM remote_events WHERE runner=? ORDER BY id ASC LIMIT ?)",
-          ).run(runner, excess);
-          count -= Number(deleted.changes);
-        }
-        committedCount = count;
-        this.stmt("UPDATE remote_runners SET received=? WHERE runner=?").run(
-          seq,
-          runner,
-        );
-        return seq;
-      });
-      if (committedCount !== undefined) {
-        this.runnerEventCounts.set(runner, committedCount);
-      }
-      if (helloMutated) {
-        this.cacheRunnerHello(runner, {
-          owner,
-          full: payload,
-          thin: projectRunnerHello(payload),
-        });
-      }
-      this.notify(owner);
-      return receivedWatermark;
-    } catch (error) {
-      this.runnerEventCounts.delete(runner);
-      if (helloMutated) this.runnerHelloCache.delete(runner);
-      throw error;
-    }
+    const ctx: RemoteIngestContext = {
+      retention: this.retention,
+      runnerEventCounts: this.runnerEventCounts,
+      runnerHelloCache: this.runnerHelloCache,
+      stmt: (sql) => this.stmt(sql),
+      register: (o, r) => this.register(o, r),
+      watermarks: (r) => this.watermarks(r),
+      transaction: (work) => this.transaction(work),
+      runnerBindings: (o, r) => this.runnerBindings(o, r),
+      assertNativeIdentity: (existing, incoming) =>
+        this.assertNativeIdentity(existing, incoming),
+      writeBindings: (o, r, bindings) => this.writeBindings(o, r, bindings),
+      saveBinding: (o, r, binding) => this.saveBinding(o, r, binding),
+      cacheRunnerHello: (r, entry) => this.cacheRunnerHello(r, entry),
+      notify: (o) => this.notify(o),
+      notifyPlugins: (o, r) => this.notifyPlugins(o, r),
+    };
+    return receiveRemoteFrame(
+      ctx,
+      owner,
+      runner,
+      seq,
+      payload,
+      activeGeneration,
+    );
   }
 
   events(
@@ -825,31 +616,13 @@ export class RemoteContentStore {
     runner: string,
     hub: string,
   ): { transcript: number | null; approvals: number | null } {
-    let transcript: number | null = null;
-    const hubIter = this.stmt(
-      `SELECT id,payload FROM remote_events
-         WHERE owner=? AND runner=? AND hub=?
-         ORDER BY id DESC LIMIT ${SNAPSHOT_LOOKBACK}`,
-    ).iterate(owner, runner, hub) as Iterable<{ id: number; payload: string }>;
-    for (const row of hubIter) {
-      if (row.payload.includes('"kind":"history/snapshot"')) {
-        transcript = Number(row.id);
-        break;
-      }
-    }
-    let approvals: number | null = null;
-    const runnerIter = this.stmt(
-      `SELECT id,payload FROM remote_events
-         WHERE owner=? AND runner=? AND hub IS NULL
-         ORDER BY id DESC LIMIT ${SNAPSHOT_LOOKBACK}`,
-    ).iterate(owner, runner) as Iterable<{ id: number; payload: string }>;
-    for (const row of runnerIter) {
-      if (row.payload.includes('"pending_approvals"')) {
-        approvals = Number(row.id);
-        break;
-      }
-    }
-    return { transcript, approvals };
+    return findRemoteResumePoint(
+      (sql) => this.stmt(sql),
+      owner,
+      runner,
+      hub,
+      SNAPSHOT_LOOKBACK,
+    );
   }
 
   cursor(owner: string): number {
@@ -927,9 +700,10 @@ export class RemoteContentStore {
           JSON.stringify(binding),
         );
       }
-      this.stmt(
-        `INSERT INTO remote_sessions(owner,runner,hub,native,binding) VALUES ${placeholders} ON CONFLICT(runner,hub) DO UPDATE SET native=excluded.native, binding=excluded.binding`,
-      ).run(...values);
+      const sql = `INSERT INTO remote_sessions(owner,runner,hub,native,binding) VALUES ${placeholders} ON CONFLICT(runner,hub) DO UPDATE SET native=excluded.native, binding=excluded.binding`;
+      (chunk.length === 1 ? this.stmt(sql) : this.db.prepare(sql)).run(
+        ...values,
+      );
     }
   }
 
@@ -958,7 +732,11 @@ export class RemoteContentStore {
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Ignore rollback errors if SQLite already rolled back the transaction.
+      }
       throw error;
     }
   }

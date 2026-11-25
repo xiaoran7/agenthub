@@ -2,7 +2,7 @@ import { isIP } from "node:net";
 
 import { ContractError } from "@agent-pulse/contracts";
 import type { FastifyRequest } from "fastify";
-import { AccountError } from "./accounts.js";
+import { AccountError } from "./account-helpers.js";
 import type { PushSubscription } from "./push.js";
 
 const MAX_PUSH_ENDPOINT_LENGTH = 2_048;
@@ -247,19 +247,22 @@ export function resolveTrustProxyConfig(
   host: string,
   rawHops: string | undefined,
   rawAddresses?: string,
-): false | string[] {
+): boolean | number | string[] {
+  let parsedHops: number | undefined;
   if (rawHops !== undefined && rawHops.trim() !== "") {
     const parsed = Number(rawHops.trim());
     if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 8) {
       throw new Error("AGENT_PULSE_TRUST_PROXY_HOPS must be an integer 0..8");
     }
     if (parsed === 0) return false;
+    parsedHops = parsed;
   }
   const addresses = (rawAddresses ?? "")
     .split(",")
     .map((address) => address.trim())
     .filter(Boolean);
   if (addresses.length > 0) return addresses;
+  if (parsedHops !== undefined) return parsedHops;
   const normalized = host.trim().toLowerCase();
   const loopback =
     normalized === "localhost" ||

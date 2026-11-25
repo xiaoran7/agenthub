@@ -22,9 +22,14 @@ import {
 } from "./remote-store.js";
 import { extractDiscoveryProviders } from "./remote-store-validation.js";
 import {
+  createRemoteErrorHandler,
   registerRemoteStreamEndpoint,
   verifyRunnerHandshake,
 } from "./remote-stream-helpers.js";
+
+const MAX_WS_CONNECTIONS = 256;
+const MAX_UNAUTH_WS_CONNECTIONS = 64;
+const MAX_UNAUTH_WS_PER_IP = 8;
 
 interface Connection {
   socket: WebSocket;
@@ -40,7 +45,7 @@ interface Connection {
 }
 
 export interface RemoteControlHooks {
-  revokeRunner: (runner: string) => void;
+  revokeRunner: (runner: string, expectedOwner?: string) => void;
   invalidateStreamAuth: () => void;
 }
 
@@ -73,9 +78,24 @@ export function registerRemoteRoutes(
 ): void {
   const connections = new Map<string, Connection>();
   const pluginBroker = new PendingPluginCommandBroker();
-  const streams = new Set<() => void>();
-  const ownerStreams = new Map<string, Set<() => void>>();
+  const streams = new Set<(destroySocket?: boolean) => void>();
+  const ownerStreams = new Map<
+    string,
+    Set<(destroySocket?: boolean) => void>
+  >();
+  const streamRevalidators = new Set<() => void>();
   const sockets = new Set<WebSocket>();
+  const unauthSockets = new Set<WebSocket>();
+  const unauthByIp = new Map<string, number>();
+  const releaseUnauth = (socket: WebSocket, ip: string): void => {
+    if (!unauthSockets.delete(socket)) return;
+    const count = unauthByIp.get(ip) ?? 0;
+    if (count <= 1) {
+      unauthByIp.delete(ip);
+    } else {
+      unauthByIp.set(ip, count - 1);
+    }
+  };
   const now = options.now ?? (() => new Date());
   const presence = options.presence ?? new RunnerPresence();
   const isOnline = (runner: string): boolean => presence.isOnline(runner);
@@ -83,10 +103,17 @@ export function registerRemoteRoutes(
   const streamAuthRevalidateMs = options.streamAuthRevalidateMs ?? 0;
   let authEpoch = 0;
   options.onControlHooks?.({
-    revokeRunner(runner: string): void {
-      pluginBroker.rejectForRunner(runner, "runner_offline");
-      content.deleteRunnerPlugins(runner);
+    revokeRunner(runner: string, expectedOwner?: string): void {
       const conn = connections.get(runner);
+      if (expectedOwner) {
+        if (conn && conn.owner !== expectedOwner) return;
+        if (!conn) {
+          const recordedOwner = content.runnerOwner(runner);
+          if (recordedOwner && recordedOwner !== expectedOwner) return;
+        }
+      }
+      pluginBroker.rejectForRunner(runner, "runner_offline");
+      content.deleteRunnerPlugins(runner, expectedOwner);
       if (conn) {
         conn.verifiedAt = 0;
         conn.socket.close(1008, "device_revoked");
@@ -96,6 +123,9 @@ export function registerRemoteRoutes(
     },
     invalidateStreamAuth(): void {
       authEpoch += 1;
+      for (const revalidate of [...streamRevalidators]) {
+        revalidate();
+      }
     },
   });
   /**
@@ -174,46 +204,50 @@ export function registerRemoteRoutes(
       }
     }
   };
-  app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof AuthenticationError) {
-      void reply.status(401).send({ error: "authentication_required" });
+  app.setErrorHandler(createRemoteErrorHandler(app));
+  app.get("/v3/remote/ws", { websocket: true }, (socket, request) => {
+    const clientIp = request.ip || "unknown";
+    const ipUnauthCount = unauthByIp.get(clientIp) ?? 0;
+    if (
+      sockets.size >= MAX_WS_CONNECTIONS ||
+      unauthSockets.size >= MAX_UNAUTH_WS_CONNECTIONS ||
+      ipUnauthCount >= MAX_UNAUTH_WS_PER_IP
+    ) {
+      socket.close(1013, "too_many_connections");
+      const rejectTimer = setTimeout(() => socket.terminate?.(), 1_000);
+      rejectTimer.unref?.();
+      socket.once("close", () => clearTimeout(rejectTimer));
       return;
     }
-    const code =
-      error instanceof RemoteStoreError ? error.code : "remote_request_failed";
-    const status =
-      code === "device_not_found" ||
-      code === "session_not_found" ||
-      code === "plugin_not_found"
-        ? 404
-        : code === "runner_offline"
-          ? 503
-          : code === "plugin_action_timeout"
-            ? 504
-            : code === "stream_limit"
-              ? 429
-              : code === "plugin_permission_denied" ||
-                  code === "workspace_permission_denied"
-                ? 403
-                : 400;
-    void reply.status(status).send({ error: code });
-  });
-  app.get("/v3/remote/ws", { websocket: true }, (socket) => {
     sockets.add(socket);
+    unauthSockets.add(socket);
+    unauthByIp.set(clientIp, ipUnauthCount + 1);
     const nonce = randomBytes(32).toString("hex");
     let connection: Connection | undefined;
+    let closing = false;
+    let terminateTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleForceTerminate = (): void => {
+      if (terminateTimer !== undefined) return;
+      terminateTimer = setTimeout(() => {
+        socket.terminate?.();
+      }, 1_000);
+      terminateTimer.unref?.();
+    };
     let chain = Promise.resolve();
     let queued = 0;
     let queuedBytes = 0;
     socket.send(JSON.stringify({ type: "challenge", version: 3, nonce }));
-    const timeout = setTimeout(
-      () => socket.close(1008, "handshake_timeout"),
-      10_000,
-    );
+    const timeout = setTimeout(() => {
+      closing = true;
+      socket.close(1008, "handshake_timeout");
+      scheduleForceTerminate();
+    }, 10_000);
+    timeout.unref?.();
     socket.on("pong", () => {
       if (connection) connection.lastSeen = Date.now();
     });
     socket.on("message", (data) => {
+      if (closing) return;
       const bytes = Buffer.isBuffer(data)
         ? data.byteLength
         : Array.isArray(data)
@@ -224,7 +258,9 @@ export function registerRemoteRoutes(
         queuedBytes + bytes > 32 * 1024 * 1024 ||
         bytes > (connection ? 17 * 1024 * 1024 : 16 * 1024)
       ) {
+        closing = true;
         socket.close(1009, "frame_too_large");
+        if (!connection) scheduleForceTerminate();
         return;
       }
       const serialized = data.toString("utf8");
@@ -232,6 +268,7 @@ export function registerRemoteRoutes(
       queuedBytes += bytes;
       chain = chain
         .then(async () => {
+          if (closing) return;
           const frame = JSON.parse(serialized) as Record<string, unknown>;
           if (!connection) {
             const handshake = await verifyRunnerHandshake(
@@ -239,6 +276,7 @@ export function registerRemoteRoutes(
               frame,
               nonce,
             );
+            if (closing) return;
             const device = handshake.device;
             content.register(device.owner_id, device.device_id);
             // A restarted Host publishes a new generation, and a command is
@@ -283,6 +321,7 @@ export function registerRemoteRoutes(
               ),
             };
             connection = nextConnection;
+            releaseUnauth(socket, clientIp);
             connections.set(nextConnection.runner, nextConnection);
             presence.markOnline(nextConnection.runner);
             clearTimeout(timeout);
@@ -306,6 +345,7 @@ export function registerRemoteRoutes(
             frameNow - connection.verifiedAt >= deviceRevalidateMs
           ) {
             await requireDevice(connection.owner, connection.runner);
+            if (closing) return;
             assertCurrentConnection(connection);
             connection.verifiedAt = Date.now();
           }
@@ -327,16 +367,11 @@ export function registerRemoteRoutes(
                 connection.generation,
               );
             } catch (err) {
-              const currentReceived =
-                err instanceof RemoteStoreError &&
-                err.code === "sequence_conflict"
-                  ? content.watermarks(connection.runner).received
-                  : -1;
               if (
-                currentReceived >= 0 &&
-                Number(frame.seq) <= currentReceived
+                err instanceof RemoteStoreError &&
+                err.code === "sequence_pruned"
               ) {
-                ackSeq = currentReceived;
+                ackSeq = content.watermarks(connection.runner).received;
               } else {
                 throw err;
               }
@@ -366,6 +401,16 @@ export function registerRemoteRoutes(
           } else throw new RemoteStoreError("invalid_frame");
         })
         .catch((error: unknown) => {
+          if (closing) return;
+          closing = true;
+          if (connection && connections.get(connection.runner) === connection) {
+            connections.delete(connection.runner);
+            pluginBroker.rejectForRunner(connection.runner, "runner_offline");
+            presence.scheduleOffline(
+              connection.runner,
+              options?.offlineGraceMs ?? 0,
+            );
+          }
           const code =
             error instanceof RemoteStoreError
               ? error.code
@@ -373,6 +418,7 @@ export function registerRemoteRoutes(
           if (socket.readyState === 1)
             socket.send(JSON.stringify({ type: "error", code }));
           socket.close(1008, code);
+          if (!connection) scheduleForceTerminate();
         })
         .finally(() => {
           queued--;
@@ -380,7 +426,10 @@ export function registerRemoteRoutes(
         });
     });
     socket.on("close", () => {
+      closing = true;
       clearTimeout(timeout);
+      if (terminateTimer !== undefined) clearTimeout(terminateTimer);
+      releaseUnauth(socket, clientIp);
       sockets.delete(socket);
       // A replaced socket closes after its successor is already registered;
       // only the current connection may clear presence.
@@ -455,11 +504,15 @@ export function registerRemoteRoutes(
         allowed.add(runner.runner_id);
       } else {
         const conn = connections.get(runner.runner_id);
-        if (conn) {
+        if (conn && conn.owner === owner) {
           conn.socket.close(1008, "device_revoked");
           connections.delete(runner.runner_id);
+          pluginBroker.rejectForRunner(runner.runner_id, "runner_offline");
+          presence.markOffline(runner.runner_id);
+        } else if (!conn && (!device || device.owner_id === owner)) {
+          pluginBroker.rejectForRunner(runner.runner_id, "runner_offline");
+          presence.markOffline(runner.runner_id);
         }
-        presence.markOffline(runner.runner_id);
       }
     }
     // Include any active registered device that is not yet in content.runners
@@ -576,24 +629,7 @@ export function registerRemoteRoutes(
     async (request) => {
       const owner = await resolveOwner(request);
       const { runner } = request.params;
-      // The same rule the list uses, so a device the console can see is a
-      // device whose `hello` can be fetched: either it has published content
-      // for this owner, or it is a live registration of this owner's. Checking
-      // the registration alone would 404 a Runner that is registered but has
-      // not sent a `ready` frame yet — exactly the device the console shows
-      // with an empty workspace list.
-      const device = await devices.getRegisteredDevice(runner);
-      const registered = device?.owner_id === owner && !device.revoked_at;
-      const hasContent = content
-        .thinRunners(owner)
-        .some((item) => item.runner_id === runner);
-      // `device_not_found` rather than `runner_not_found`: the error handler
-      // maps only `device_not_found` and `session_not_found` to 404, and any
-      // other code comes back 400 — which would tell the caller its request
-      // was malformed rather than that the device is not theirs.
-      if (!registered && !hasContent) {
-        throw new RemoteStoreError("device_not_found");
-      }
+      await requireDevice(owner, runner);
       const hello = content.runnerHello(owner, runner);
       if (!hello) throw new RemoteStoreError("runner_not_ready");
       return {
@@ -619,6 +655,7 @@ export function registerRemoteRoutes(
         role === "member" &&
         ((command.command.action === "connect" &&
           (command.command.sandbox === "danger-full-access" ||
+            command.command.approval_policy === "never" ||
             command.command.permission_mode === "bypassPermissions")) ||
           (command.command.action === "send_prompt" &&
             command.command.permission_mode === "bypassPermissions"))
@@ -723,15 +760,21 @@ export function registerRemoteRoutes(
     content,
     streams,
     ownerStreams,
+    streamRevalidators,
     resolveOwner,
     () => authEpoch,
     streamAuthRevalidateMs,
   );
+  app.addHook("preClose", async () => {
+    for (const close of [...streams]) close(true);
+    for (const socket of [...sockets]) socket.terminate();
+    app.server.closeIdleConnections?.();
+  });
   app.addHook("onClose", async () => {
     clearInterval(watchdog);
     presence.close();
-    for (const close of streams) close();
-    for (const socket of sockets) socket.terminate();
+    for (const close of [...streams]) close(true);
+    for (const socket of [...sockets]) socket.terminate();
     content.close();
   });
 }

@@ -42,6 +42,7 @@ struct UiHostState {
     agenthub_dir: PathBuf,
     base_url: RefCell<String>,
     dark: Cell<bool>,
+    closing: Cell<bool>,
     theme_msg: u32,
     idle: RefCell<IdleTracker>,
     controller: RefCell<Option<ICoreWebView2Controller>>,
@@ -71,8 +72,18 @@ unsafe fn host_state<'a>(hwnd: HWND) -> Option<&'a UiHostState> {
 }
 
 fn release_webview_handles(state: &UiHostState) {
-    let _ = state.webview.borrow_mut().take();
-    if let Some(ctrl) = state.controller.borrow_mut().take() {
+    let wv = state
+        .webview
+        .try_borrow_mut()
+        .ok()
+        .and_then(|mut v| v.take());
+    drop(wv);
+    let ctrl = state
+        .controller
+        .try_borrow_mut()
+        .ok()
+        .and_then(|mut c| c.take());
+    if let Some(ctrl) = ctrl {
         unsafe {
             let _ = ctrl.Close();
         }
@@ -80,8 +91,15 @@ fn release_webview_handles(state: &UiHostState) {
 }
 
 fn handle_copydata_navigation(hwnd: HWND, state: &UiHostState, lparam: LPARAM) -> bool {
+    if state.closing.get() || lparam.0 == 0 {
+        return false;
+    }
     let cds = unsafe { &*(lparam.0 as *const COPYDATASTRUCT) };
-    if cds.dwData != COPYDATA_NAVIGATE_URL || cds.lpData.is_null() {
+    if cds.dwData != COPYDATA_NAVIGATE_URL
+        || cds.lpData.is_null()
+        || cds.cbData == 0
+        || cds.cbData > 8192
+    {
         return false;
     }
     let slice = unsafe { std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize) };
@@ -91,7 +109,10 @@ fn handle_copydata_navigation(hwnd: HWND, state: &UiHostState, lparam: LPARAM) -
     if !super::is_safe_http_url(url) {
         return false;
     }
-    let same_base = url_base(url) == url_base(&state.base_url.borrow());
+    let Ok(current_base) = state.base_url.try_borrow().map(|b| b.clone()) else {
+        return false;
+    };
+    let same_base = url_base(url) == url_base(&current_base);
     if !same_base {
         return false;
     }
@@ -103,9 +124,11 @@ fn handle_copydata_navigation(hwnd: HWND, state: &UiHostState, lparam: LPARAM) -
         }
         let _ = SetForegroundWindow(hwnd);
     }
-    state.idle.borrow_mut().reset();
+    if let Ok(mut idle) = state.idle.try_borrow_mut() {
+        idle.reset();
+    }
 
-    let wv = state.webview.borrow().clone();
+    let wv = state.webview.try_borrow().ok().and_then(|w| w.clone());
     if let Some(webview) = wv {
         if let Some((_, hash)) = url.split_once('#') {
             let script = HSTRING::from(build_hash_navigation_script(hash));
@@ -125,18 +148,29 @@ unsafe extern "system" fn ui_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui_wnd_proc_inner(hwnd, msg, wparam, lparam)
+    }))
+    .unwrap_or_else(|_| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) })
+}
+
+fn ui_wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let Some(state) = (unsafe { host_state(hwnd) }) else {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     };
 
     if state.theme_msg != 0 && msg == state.theme_msg {
+        if state.closing.get() {
+            return LRESULT(0);
+        }
         let dark = wparam.0 != 0;
         state.dark.set(dark);
         unsafe {
             apply_dwm_titlebar_theme(hwnd, dark);
             let _ = InvalidateRect(Some(hwnd), None, true);
         }
-        if let Some(ctrl) = state.controller.borrow().clone()
+        let ctrl = state.controller.try_borrow().ok().and_then(|c| c.clone());
+        if let Some(ctrl) = ctrl
             && let Ok(ctrl2) = ctrl.cast::<ICoreWebView2Controller2>()
         {
             let _ = unsafe { ctrl2.SetDefaultBackgroundColor(bg_color_for_theme(dark)) };
@@ -157,10 +191,16 @@ unsafe extern "system" fn ui_wnd_proc(
             LRESULT(1)
         }
         WM_SIZE => {
-            if wparam.0 as u32 != SIZE_MINIMIZED {
-                state.idle.borrow_mut().reset();
+            if state.closing.get() {
+                return LRESULT(0);
             }
-            if let Some(ctrl) = state.controller.borrow().clone() {
+            if wparam.0 as u32 != SIZE_MINIMIZED
+                && let Ok(mut idle) = state.idle.try_borrow_mut()
+            {
+                idle.reset();
+            }
+            let ctrl = state.controller.try_borrow().ok().and_then(|c| c.clone());
+            if let Some(ctrl) = ctrl {
                 let mut rect = RECT::default();
                 unsafe {
                     let _ = GetClientRect(hwnd, &mut rect);
@@ -170,48 +210,67 @@ unsafe extern "system" fn ui_wnd_proc(
             LRESULT(0)
         }
         WM_MOVE => {
-            if let Some(ctrl) = state.controller.borrow().clone() {
+            if !state.closing.get()
+                && let Some(ctrl) = state.controller.try_borrow().ok().and_then(|c| c.clone())
+            {
                 let _ = unsafe { ctrl.NotifyParentWindowPositionChanged() };
             }
             LRESULT(0)
         }
         WM_MOVING => {
-            if let Some(ctrl) = state.controller.borrow().clone() {
+            if !state.closing.get()
+                && let Some(ctrl) = state.controller.try_borrow().ok().and_then(|c| c.clone())
+            {
                 let _ = unsafe { ctrl.NotifyParentWindowPositionChanged() };
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_DPICHANGED => {
-            let suggested = unsafe { &*(lparam.0 as *const RECT) };
-            unsafe {
-                let _ = SetWindowPos(
-                    hwnd,
-                    None,
-                    suggested.left,
-                    suggested.top,
-                    suggested.right - suggested.left,
-                    suggested.bottom - suggested.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-                crate::window_icon::apply_native_icon(hwnd.0 as _);
+            if !state.closing.get() && lparam.0 != 0 {
+                let suggested = unsafe { &*(lparam.0 as *const RECT) };
+                unsafe {
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        suggested.left,
+                        suggested.top,
+                        suggested.right - suggested.left,
+                        suggested.bottom - suggested.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                    crate::window_icon::apply_native_icon(hwnd.0 as _);
+                }
             }
             LRESULT(0)
         }
         WM_ACTIVATE => {
-            if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
-                state.idle.borrow_mut().reset();
+            if !state.closing.get()
+                && (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE
+                && let Ok(mut idle) = state.idle.try_borrow_mut()
+            {
+                idle.reset();
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_SETFOCUS => {
-            state.idle.borrow_mut().reset();
-            if let Some(ctrl) = state.controller.borrow().clone() {
+            if state.closing.get() {
+                return LRESULT(0);
+            }
+            if let Ok(mut idle) = state.idle.try_borrow_mut() {
+                idle.reset();
+            }
+            let ctrl = state.controller.try_borrow().ok().and_then(|c| c.clone());
+            if let Some(ctrl) = ctrl {
                 let _ = unsafe { ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
             }
             LRESULT(0)
         }
         WM_MOUSEACTIVATE | WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_KEYDOWN => {
-            state.idle.borrow_mut().reset();
+            if !state.closing.get()
+                && let Ok(mut idle) = state.idle.try_borrow_mut()
+            {
+                idle.reset();
+            }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_COPYDATA => {
@@ -222,14 +281,24 @@ unsafe extern "system" fn ui_wnd_proc(
             }
         }
         WM_TIMER if wparam.0 == TIMER_IDLE_ID => {
+            if state.closing.get() {
+                return LRESULT(0);
+            }
             let active = unsafe { is_window_active_for_idle(hwnd) };
-            let action = state.idle.borrow_mut().step(active);
+            let action = state
+                .idle
+                .try_borrow_mut()
+                .map(|mut idle| idle.step(active))
+                .unwrap_or(IdleAction::KeepAlive);
             if action == IdleAction::Release {
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
             }
             LRESULT(0)
         }
         WM_CLOSE => {
+            if state.closing.replace(true) {
+                return LRESULT(0);
+            }
             unsafe {
                 if !IsIconic(hwnd).as_bool() && !IsZoomed(hwnd).as_bool() {
                     let mut rect = RECT::default();
@@ -248,6 +317,7 @@ unsafe extern "system" fn ui_wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            state.closing.set(true);
             release_webview_handles(state);
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
@@ -315,6 +385,7 @@ pub fn run_ui_window(url: &str, idle_seconds: u64, title: &str) -> Result<()> {
         agenthub_dir,
         base_url: RefCell::new(url_base(url).to_string()),
         dark: Cell::new(dark),
+        closing: Cell::new(false),
         theme_msg,
         idle: RefCell::new(IdleTracker::new(idle_seconds)),
         controller: RefCell::new(None),
@@ -328,8 +399,18 @@ pub fn run_ui_window(url: &str, idle_seconds: u64, title: &str) -> Result<()> {
         let webview = unsafe { controller.CoreWebView2()? };
         configure_and_navigate(hwnd, &controller, &webview, url, dark)?;
         let st = unsafe { &*state_ptr };
-        *st.controller.borrow_mut() = Some(controller);
-        *st.webview.borrow_mut() = Some(webview);
+        if st.closing.get() {
+            unsafe {
+                let _ = controller.Close();
+            }
+            return Ok(());
+        }
+        if let Ok(mut ctrl_slot) = st.controller.try_borrow_mut() {
+            *ctrl_slot = Some(controller);
+        }
+        if let Ok(mut wv_slot) = st.webview.try_borrow_mut() {
+            *wv_slot = Some(webview);
+        }
         Ok(())
     })();
 
@@ -347,15 +428,29 @@ pub fn run_ui_window(url: &str, idle_seconds: u64, title: &str) -> Result<()> {
         let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
         let _ = UpdateWindow(hwnd);
         let _ = SetForegroundWindow(hwnd);
-        if let Some(ctrl) = (*state_ptr).controller.borrow().clone() {
+        let ctrl = (*state_ptr)
+            .controller
+            .try_borrow()
+            .ok()
+            .and_then(|c| c.clone());
+        if let Some(ctrl) = ctrl {
             let _ = ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         }
         let _ = SetTimer(Some(hwnd), TIMER_IDLE_ID, 1000, None);
 
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        loop {
+            let ret = GetMessageW(&mut msg, None, 0, 0).0;
+            if ret > 0 {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            } else {
+                if ret < 0 {
+                    release_webview_handles(&*state_ptr);
+                    let _ = DestroyWindow(hwnd);
+                }
+                break;
+            }
         }
 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

@@ -35,6 +35,10 @@ impl<K: Clone + Eq + std::hash::Hash, V> BoundedMap<K, V> {
         self.map.contains_key(key)
     }
 
+    pub(crate) fn iter(&self) -> std::collections::hash_map::Iter<'_, K, V> {
+        self.map.iter()
+    }
+
     pub(crate) fn insert(&mut self, key: K, value: V) {
         if let Some(existing) = self.map.get_mut(&key) {
             *existing = value;
@@ -139,6 +143,9 @@ impl<K: Clone + Eq + std::hash::Hash> BoundedSet<K> {
 pub struct MultiProviderTransport {
     pub(crate) codex: Option<CodexAppServer>,
     pub(crate) codex_models_cache: Option<(Instant, Value)>,
+    pub(crate) codex_active_turns: HashMap<String, String>,
+    pub(crate) codex_pending_requests: HashMap<String, (String, Value)>,
+    pub(crate) codex_buffered_events: VecDeque<Value>,
     pub(crate) claude_binary: PathBuf,
     pub(crate) claude_active_turns: HashMap<String, String>,
     pub(crate) claude_cancels: HashMap<String, Arc<AtomicBool>>,
@@ -176,6 +183,9 @@ impl MultiProviderTransport {
         Self {
             codex,
             codex_models_cache: None,
+            codex_active_turns: HashMap::new(),
+            codex_pending_requests: HashMap::new(),
+            codex_buffered_events: VecDeque::new(),
             claude_binary: crate::collectors::discover_claude_binary(),
             claude_active_turns: HashMap::new(),
             claude_cancels: HashMap::new(),
@@ -404,6 +414,43 @@ pub(crate) fn resolve_antigravity_control_decision(result: &Value) -> &str {
 }
 
 impl MultiProviderTransport {
+    pub(crate) fn handle_codex_transport_loss(&mut self) {
+        self.codex = None;
+        self.codex_models_cache = None;
+        for (_, (thread_id, request_id)) in self.codex_pending_requests.drain() {
+            self.codex_buffered_events.push_back(json!({
+                "method": "serverRequest/resolved",
+                "params": {
+                    "threadId": thread_id,
+                    "requestId": request_id
+                }
+            }));
+        }
+        let err_msg = "Codex 进程连接已断开";
+        for (thread_id, turn_id) in self.codex_active_turns.drain() {
+            self.codex_buffered_events.push_back(json!({
+                "method": "error",
+                "params": {
+                    "threadId": &thread_id,
+                    "turnId": &turn_id,
+                    "willRetry": false,
+                    "error": { "message": err_msg }
+                }
+            }));
+            self.codex_buffered_events.push_back(json!({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": thread_id,
+                    "turn": {
+                        "id": turn_id,
+                        "status": "failed",
+                        "error": err_msg
+                    }
+                }
+            }));
+        }
+    }
+
     pub(crate) fn handle_respond(&mut self, id: Value, result: Value) -> Result<(), NativeError> {
         // Route "claude_req_<id>" strictly to its owning Claude session.
         if let Some(id_str) = id.as_str()
@@ -423,11 +470,16 @@ impl MultiProviderTransport {
                 } else {
                     result
                 };
-            if let Some(owner_sid) = self.claude_pending_requests.remove(actual_id)
-                && let Some(session) = self.claude_sessions.get_mut(&owner_sid)
-            {
-                let _ = session.send_control_response(actual_id, "success", response_payload);
-            }
+            let Some(owner_sid) = self.claude_pending_requests.get(actual_id).cloned() else {
+                return Err(NativeError::rejected("pending_request_not_found"));
+            };
+            let Some(session) = self.claude_sessions.get_mut(&owner_sid) else {
+                return Err(NativeError::rejected("pending_request_not_found"));
+            };
+            session
+                .send_control_response(actual_id, "success", response_payload)
+                .map_err(|_| NativeError::rejected("control_response_failed"))?;
+            self.claude_pending_requests.remove(actual_id);
             return Ok(());
         }
         // Antigravity 2.0 Desktop daemon interactive permission / command / ask_question response
@@ -435,14 +487,21 @@ impl MultiProviderTransport {
             && let Some(spec) = id_str.strip_prefix("antigravity_daemon_req_")
         {
             let mut parts = spec.splitn(3, ':');
-            if let (Some(cascade_id), Some(step_str), Some(kind)) =
+            let (Some(cascade_id), Some(step_str), Some(kind)) =
                 (parts.next(), parts.next(), parts.next())
-                && let Ok(step_idx) = step_str.parse::<u64>()
-            {
-                let _ = crate::collectors::antigravity::respond_daemon_interaction(
-                    cascade_id, step_idx, kind, &result,
-                );
+            else {
+                return Err(NativeError::rejected("invalid_daemon_request_id"));
+            };
+            let Ok(step_idx) = step_str.parse::<u64>() else {
+                return Err(NativeError::rejected("invalid_daemon_request_id"));
+            };
+            if cascade_id.trim().is_empty() || kind.trim().is_empty() {
+                return Err(NativeError::rejected("invalid_daemon_request_id"));
             }
+            crate::collectors::antigravity::respond_daemon_interaction(
+                cascade_id, step_idx, kind, &result,
+            )
+            .map_err(|_| NativeError::rejected("control_response_failed"))?;
             return Ok(());
         }
         // If request ID is string and starts with "antigravity_req_", route strictly to owning session
@@ -450,34 +509,54 @@ impl MultiProviderTransport {
             && let Some(actual_id) = id_str.strip_prefix("antigravity_req_")
         {
             let decision = resolve_antigravity_control_decision(&result).to_string();
-            if let Some(owner_sid) = self.antigravity_pending_requests.remove(actual_id)
-                && let Some(session) = self.antigravity_sessions.get_mut(&owner_sid)
-            {
-                let _ = session.send_control_response(actual_id, &decision, result);
-            }
+            let Some(owner_sid) = self.antigravity_pending_requests.get(actual_id).cloned() else {
+                return Err(NativeError::rejected("pending_request_not_found"));
+            };
+            let Some(session) = self.antigravity_sessions.get_mut(&owner_sid) else {
+                return Err(NativeError::rejected("pending_request_not_found"));
+            };
+            session
+                .send_control_response(actual_id, &decision, result)
+                .map_err(|_| NativeError::rejected("control_response_failed"))?;
+            self.antigravity_pending_requests.remove(actual_id);
             return Ok(());
         }
         // Route "acp_req_<id>" strictly to its owning ACP server.
-        if let Some(id_str) = id.as_str()
-            && let Some(actual_id) = id_str.strip_prefix("acp_req_")
+        if let Some(actual_id) = id
+            .as_str()
+            .and_then(|id_str| id_str.strip_prefix("acp_req_"))
+            .map(str::to_owned)
         {
             let decision = result
                 .get("decision")
                 .and_then(Value::as_str)
                 .unwrap_or("decline");
-            if let Some(owner_sid) = self.acp_pending_requests.remove(actual_id)
-                && let Some(server) = self.acp_servers.get_mut(&owner_sid)
-            {
-                let _ = server.respond_permission(id, decision);
-            }
+            let Some(owner_sid) = self.acp_pending_requests.get(&actual_id).cloned() else {
+                return Err(NativeError::rejected("pending_request_not_found"));
+            };
+            let Some(server) = self.acp_servers.get_mut(&owner_sid) else {
+                return Err(NativeError::rejected("pending_request_not_found"));
+            };
+            server
+                .respond_permission(id, decision)
+                .map_err(|_| NativeError::rejected("control_response_failed"))?;
+            self.acp_pending_requests.remove(&actual_id);
             return Ok(());
         }
         if let Some(ref mut codex) = self.codex {
-            codex
-                .respond(id, result)
-                .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+            let req_key = id.to_string();
+            match codex.respond(id, result) {
+                Ok(()) => {
+                    self.codex_pending_requests.remove(&req_key);
+                    Ok(())
+                }
+                Err(_) => {
+                    self.handle_codex_transport_loss();
+                    Err(NativeError::rejected("codex_provider_lost"))
+                }
+            }
         } else {
-            Err(NativeError::uncertain("provider_transport_lost"))
+            Err(NativeError::rejected("codex_provider_lost"))
         }
     }
 }

@@ -36,7 +36,24 @@ pub(crate) fn start_local_store_scan() {
     std::thread::spawn(run_scan_pass);
 }
 
+struct ScanResetGuard {
+    completed: bool,
+}
+
+impl Drop for ScanResetGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let mut cache = local_store_cache()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            cache.scanning = false;
+            cache.again = false;
+        }
+    }
+}
+
 fn run_scan_pass() {
+    let mut reset_guard = ScanResetGuard { completed: false };
     loop {
         // Cleared before the stores are read, so only a store that reported a
         // change during this pass can make it publish.
@@ -63,6 +80,7 @@ fn run_scan_pass() {
         }
         if !cache.again {
             cache.scanning = false;
+            reset_guard.completed = true;
             drop(cache);
             // Published only now, once the snapshot is in place: a subscriber
             // that wakes up and reads /api/dashboard sees the pass that
@@ -214,7 +232,7 @@ fn local_store_sessions() -> Vec<Value> {
                 "model": entry.model,
                 "prompt_tokens": entry.prompt_tokens,
                 "completion_tokens": entry.completion_tokens,
-                "total_tokens": entry.prompt_tokens + entry.completion_tokens,
+                "total_tokens": entry.prompt_tokens.saturating_add(entry.completion_tokens),
                 "cache_read_tokens": entry.cache_read_tokens,
                 "context_used_tokens": entry.context_used_tokens,
                 "context_window_tokens": entry.context_window_tokens,

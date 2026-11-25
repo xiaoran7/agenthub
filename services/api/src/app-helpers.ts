@@ -32,7 +32,7 @@ export function registerV1StreamRoute(
   app: FastifyInstance,
   authenticator: OwnerAuthenticator,
   broker: ChangeBroker,
-  openStreams: Set<() => void>,
+  openStreams: Set<(destroySocket?: boolean) => void>,
   streamAuthRevalidators: Set<() => void>,
   revalidateMs: number,
 ): void {
@@ -60,7 +60,7 @@ export function registerV1StreamRoute(
       if (closed || raw.destroyed || raw.writableEnded || writePaused) return;
       if (!raw.write(chunk)) {
         writePaused = true;
-        drainTimer = setTimeout(close, 15_000);
+        drainTimer = setTimeout(() => close(true), 15_000);
         drainTimer.unref?.();
         raw.once("drain", () => {
           if (drainTimer !== undefined) clearTimeout(drainTimer);
@@ -92,21 +92,29 @@ export function registerV1StreamRoute(
     );
     heartbeat.unref();
 
-    function close(): void {
-      if (closed) return;
+    function close(forceDestroy = false): void {
+      if (closed) {
+        if (forceDestroy && !raw.destroyed) raw.destroy();
+        return;
+      }
       closed = true;
       if (drainTimer !== undefined) clearTimeout(drainTimer);
       clearInterval(authTimer);
       clearInterval(heartbeat);
       unsubscribe();
       streamAuthRevalidators.delete(revalidate);
-      openStreams.delete(close);
-      raw.end();
+      openStreams.delete(closeStream);
+      if (forceDestroy) {
+        if (!raw.destroyed) raw.destroy();
+      } else if (!raw.writableEnded) {
+        raw.end();
+      }
     }
+    const closeStream = (destroySocket = false): void => close(destroySocket);
     streamAuthRevalidators.add(revalidate);
-    openStreams.add(close);
-    raw.on("close", close);
-    raw.on("error", close);
+    openStreams.add(closeStream);
+    raw.on("close", () => close(false));
+    raw.on("error", () => close(false));
   });
 }
 

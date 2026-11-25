@@ -379,25 +379,43 @@ fn antigravity_approval_routing_fails_closed_and_does_not_broadcast_unknown_requ
         .antigravity_pending_requests
         .insert("known-1".to_string(), "antigravity_sess_a".to_string());
 
+    // Missing owning session must reject with pending_request_not_found and retain mapping.
+    let missing_owner = transport
+        .respond(json!("antigravity_req_known-1"), json!({}))
+        .unwrap_err();
+    assert_eq!(missing_owner.code, "pending_request_not_found");
+    assert!(!missing_owner.outcome_unknown);
     assert!(
         transport
-            .respond(json!("antigravity_req_known-1"), json!({}))
-            .is_ok()
-    );
-    assert!(
-        !transport
             .antigravity_pending_requests
             .contains_key("known-1"),
-        "handled request id must be removed"
+        "failed respond must not drop pending request mapping"
     );
-    assert!(
-        transport
-            .respond(
-                json!("antigravity_req_unknown-99"),
-                json!({ "decision": "accept" })
-            )
-            .is_ok()
-    );
+
+    // Unknown request id must also fail closed.
+    let unknown_err = transport
+        .respond(
+            json!("antigravity_req_unknown-99"),
+            json!({ "decision": "accept" }),
+        )
+        .unwrap_err();
+    assert_eq!(unknown_err.code, "pending_request_not_found");
+
+    // Malformed daemon request id must reject with invalid_daemon_request_id.
+    let bad_daemon = transport
+        .respond(
+            json!("antigravity_daemon_req_badformat"),
+            json!({ "decision": "accept" }),
+        )
+        .unwrap_err();
+    assert_eq!(bad_daemon.code, "invalid_daemon_request_id");
+
+    // Absent Codex transport returns rejected codex_provider_lost (not uncertain host_lost).
+    let codex_err = transport
+        .respond(json!(42), json!({ "decision": "accept" }))
+        .unwrap_err();
+    assert_eq!(codex_err.code, "codex_provider_lost");
+    assert!(!codex_err.outcome_unknown);
 }
 
 #[cfg(unix)]
@@ -494,4 +512,105 @@ for raw in sys.stdin:
             .antigravity_known_real_ids
             .contains("antigravity_init-only-conv-7")
     );
+}
+
+#[test]
+fn codex_transport_loss_drains_active_turns_and_pending_requests_without_killing_host() {
+    let mut transport = MultiProviderTransport::new(None);
+    transport
+        .codex_active_turns
+        .insert("codex-thread-1".into(), "turn-codex-1".into());
+    transport
+        .codex_pending_requests
+        .insert("7".into(), ("codex-thread-1".into(), json!(7)));
+
+    transport.handle_codex_transport_loss();
+    let drained = transport.drain().unwrap();
+    assert!(drained.iter().any(|m| {
+        m["method"] == "serverRequest/resolved"
+            && m["params"]["threadId"] == "codex-thread-1"
+            && m["params"]["requestId"] == 7
+    }));
+    assert!(drained.iter().any(|m| {
+        m["method"] == "error"
+            && m["params"]["threadId"] == "codex-thread-1"
+            && m["params"]["turnId"] == "turn-codex-1"
+    }));
+    assert!(drained.iter().any(|m| {
+        m["method"] == "turn/completed"
+            && m["params"]["threadId"] == "codex-thread-1"
+            && m["params"]["turn"]["id"] == "turn-codex-1"
+            && m["params"]["turn"]["status"] == "failed"
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn persistent_antigravity_silent_exit_emits_error_and_turn_completed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let script_path = dir.path().join("mock-agy-silent-crash.sh");
+    let script = r#"#!/usr/bin/env python3
+import sys
+if "--version" in sys.argv[1:]:
+    print("2.35.0")
+    sys.exit(0)
+# Exit immediately after reading one line without emitting a result frame.
+sys.stdin.readline()
+sys.exit(1)
+"#;
+    fs::write(&script_path, script).unwrap();
+    let mut perms = fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).unwrap();
+
+    let mut transport = MultiProviderTransport::new(None);
+    transport.antigravity_binary = script_path;
+    transport.skip_antigravity_daemon = true;
+
+    let created = transport
+        .request(
+            "thread/start",
+            json!({ "agentType": "antigravity", "cwd": dir.path() }),
+        )
+        .unwrap();
+    let sid = created["thread"]["id"].as_str().unwrap().to_string();
+    transport
+        .request(
+            "turn/start",
+            json!({
+                "threadId": sid,
+                "cwd": dir.path(),
+                "sessionExists": false,
+                "input": [{ "type": "text", "text": "crash now" }]
+            }),
+        )
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut saw_error = false;
+    let mut saw_failed_done = false;
+    while Instant::now() < deadline && !(saw_error && saw_failed_done) {
+        for msg in transport.drain().unwrap() {
+            if msg["method"] == "error" && msg["params"]["threadId"] == sid {
+                saw_error = true;
+            }
+            if msg["method"] == "turn/completed"
+                && msg["params"]["threadId"] == sid
+                && msg["params"]["turn"]["status"] == "failed"
+            {
+                saw_failed_done = true;
+            }
+        }
+        if !(saw_error && saw_failed_done) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(saw_error, "silent exit must emit error");
+    assert!(
+        saw_failed_done,
+        "silent exit must emit failed turn/completed"
+    );
+    assert!(!transport.antigravity_active_turns.contains_key(&sid));
 }

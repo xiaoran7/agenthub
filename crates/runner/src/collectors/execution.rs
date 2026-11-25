@@ -157,7 +157,7 @@ fn run_agent_session_turn_streaming_once(
     on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
 ) -> Result<AgentStreamOutcome, CollectorError> {
     let program = binary.display().to_string();
-    if is_cmd_shim_path(binary) && !validate_safe_session_id(session_id) && !session_id.is_empty() {
+    if !session_id.is_empty() && !validate_safe_session_id(session_id) {
         return Err(CollectorError::Protocol {
             program,
             code: "invalid_session_id".to_owned(),
@@ -519,11 +519,13 @@ fn run_agent_stream_process(
     cancelled: &AtomicBool,
     on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
 ) -> Result<AgentStreamOutcome, CollectorError> {
+    let write_prompt_to_stdin =
+        prompt_file.is_none() && !matches!(agent, crate::domain::AgentType::Antigravity);
     command
-        .stdin(if prompt_file.is_some() {
-            Stdio::null()
-        } else {
+        .stdin(if write_prompt_to_stdin {
             Stdio::piped()
+        } else {
+            Stdio::null()
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -532,51 +534,92 @@ fn run_agent_stream_process(
         program: program.clone(),
         source,
     })?;
-    let job = ChildJob::attach(&child).map_err(|source| {
+    let mut job = Some(ChildJob::attach(&child).map_err(|source| {
         let _ = child.kill();
         let _ = child.wait();
         CollectorError::Io {
             program: program.clone(),
             source,
         }
-    })?;
-    if prompt_file.is_none() {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| CollectorError::MissingStdio {
-                program: program.clone(),
-            })?;
-        stdin
-            .write_all(prompt.as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|source| CollectorError::Io {
-                program: program.clone(),
-                source,
-            })?;
-        drop(stdin);
-    }
+    })?);
+    let stdin = if write_prompt_to_stdin {
+        match child.stdin.take() {
+            Some(stdin) => Some(stdin),
+            None => {
+                drop(job.take());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(CollectorError::MissingStdio {
+                    program: program.clone(),
+                });
+            }
+        }
+    } else {
+        drop(child.stdin.take());
+        None
+    };
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| CollectorError::MissingStdio {
-            program: program.clone(),
-        })?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| CollectorError::MissingStdio {
-            program: program.clone(),
-        })?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            drop(stdin);
+            drop(job.take());
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CollectorError::MissingStdio {
+                program: program.clone(),
+            });
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            drop(stdin);
+            drop(job.take());
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CollectorError::MissingStdio {
+                program: program.clone(),
+            });
+        }
+    };
     let stdout_reader = read_agent_turn_output(stdout, agent.clone(), on_update);
     let stderr_reader = read_child_output(stderr);
-    let status = wait_for_child_with_cancel(&mut child, &program, timeout, Some(cancelled));
-    drop(job);
-    let stdout = join_child_output(stdout_reader, &program)?;
-    let stderr_bytes = join_child_output(stderr_reader, &program)?;
+    let stdin_writer = stdin.map(|mut stdin| {
+        let payload = prompt.as_bytes().to_vec();
+        thread::spawn(move || -> std::io::Result<()> {
+            if let Err(err) = stdin
+                .write_all(&payload)
+                .and_then(|_| stdin.write_all(b"\n"))
+                && err.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Err(err);
+            }
+            drop(stdin);
+            Ok(())
+        })
+    });
+    let status =
+        wait_for_child_with_cancel(&mut child, &mut job, &program, timeout, Some(cancelled));
+    drop(job.take());
+    let stdin_res = match stdin_writer {
+        Some(handle) => match handle.join() {
+            Ok(res) => res.map_err(|source| CollectorError::Io {
+                program: program.clone(),
+                source,
+            }),
+            Err(_) => Err(CollectorError::ReaderStopped {
+                program: program.clone(),
+            }),
+        },
+        None => Ok(()),
+    };
+    let stdout_res = join_child_output(stdout_reader, &program);
+    let stderr_res = join_child_output(stderr_reader, &program);
     drop(prompt_file);
     let status = status?;
+    let stdout = stdout_res?;
+    let stderr_bytes = stderr_res?;
     if !status.success() {
         // Distinguish "this build cannot read that transcript" from a generic
         // non-zero exit before discarding stdout. Only the former is worth
@@ -611,6 +654,7 @@ fn run_agent_stream_process(
             status: detail,
         });
     }
+    stdin_res?;
     if stdout.len() > MAX_AGENT_TURN_OUTPUT_BYTES {
         return Err(CollectorError::OutputTooLarge {
             program,
@@ -668,6 +712,7 @@ fn join_child_output(
 
 fn wait_for_child_with_cancel(
     child: &mut Child,
+    job: &mut Option<ChildJob>,
     program: &str,
     timeout: Duration,
     cancelled: Option<&AtomicBool>,
@@ -681,6 +726,7 @@ fn wait_for_child_with_cancel(
             return Ok(status);
         }
         if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            drop(job.take());
             let _ = child.kill();
             let _ = child.wait();
             return Err(CollectorError::Cancelled {
@@ -688,6 +734,7 @@ fn wait_for_child_with_cancel(
             });
         }
         if Instant::now() >= deadline {
+            drop(job.take());
             let _ = child.kill();
             let _ = child.wait();
             return Err(CollectorError::Timeout {

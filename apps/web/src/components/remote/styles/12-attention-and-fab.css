@@ -1,0 +1,552 @@
+/* ================= 跨机 "要你处理" 置顶条 =================
+ *
+ * Sits above the device selector, independent of it. The sidebar below stays
+ * a drill-down; this strip is the only part of the console that answers
+ * "is anything waiting on me, anywhere" without a click.
+ *
+ * Visual language is borrowed from the tree it sits above rather than invented
+ * next to it:
+ *   - title 13.5px / 550  == `.remote-session-title`
+ *   - row radius 10px     == `.remote-session` / `.remote-device-header`
+ *   - hairline borders    == `--cds-border`
+ *   - hover lift + press rebound == the sidebar's own 0.14s easing
+ *
+ * The accent colour appears on the count chip and the state dot only. An
+ * accent-coloured frame around the whole block read as an error banner, which
+ * is the wrong signal for "two sessions are waiting on you".
+ *
+ * Every control here is 32px+ tall inside a 40px+ row. The sidebar is dense by
+ * nature, so the strip matches its density rather than the 40px form-control
+ * baseline — but it never goes below the sidebar's own smallest target.
+ */
+.remote-attention {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 11px 11px 9px;
+  border: 1px solid var(--cds-border, var(--remote-line));
+  /* 16px，不是 `--radius-xl`。令牌里的 xl 是 20px，套在一个内部行只有 10px
+   * 圆角的容器上，内外差了两档，边角看着会"外圆内方"。16px 正好卡在
+   * 大卡片（16）与行（10）之间，视觉上是从外向里递减的。 */
+  border-radius: 16px;
+  background: var(--cds-surface-1, var(--remote-surface));
+  box-shadow: var(--cds-shadow-sm);
+}
+.remote-attention-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+}
+/* 这是 "区块标签"，不是和行标题抢层级的标题。
+ *
+ * 原先写 13px/600：比行标题的 13.5px 还小半号，字重却更重，读起来既不像
+ * 标题也不像标签，是最难看的中间态。往下压到 11.5px 加字距，它就明确变成
+ * 一枚安静的分区标签，层级由 "大小 + 字距 + 灰度" 表达，而不是靠加粗。 */
+.remote-attention-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+/* 计数不再是胶囊。
+ *
+ * 陶土底 + 陶土字的圆角小方块，在侧栏里就是一枚聊天软件式未读红点 ——
+ * 整个控制台别处没有这种形状，它是这一块自己发明的。改成纯数字排印：
+ * 等宽数字、陶土文字色、紧贴标签，靠颜色而不是靠形状提示"有事"。
+ * 11.5px 的小字拿 --cds-clay-ink（不是 --cds-clay），5.0:1 才立得住。 */
+/* 计数和标签之间要有分隔。7px 的距离加上两者都是无衬线小字，"要你处理 6"
+ * 读起来会黏成"要你处理6"。一枚中点既断开语义，又比加括号或改写成"6 条"
+ * 更省宽度 —— 侧栏只有 300px。 */
+.remote-attention-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+}
+.remote-attention-count::before {
+  content: "·";
+  font-weight: 400;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+.remote-attention-toggle,
+.remote-attention-more {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 8px !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--radius-sm, 6px) !important;
+  background: transparent !important;
+  color: var(--cds-text-muted, var(--remote-muted)) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease,
+    border-color 0.14s ease;
+}
+.remote-attention-toggle:hover,
+.remote-attention-more:hover {
+  background: var(--cds-alpha-1, var(--remote-hover)) !important;
+  color: var(--cds-text-primary, var(--remote-ink)) !important;
+}
+.remote-attention-more {
+  align-self: stretch;
+  margin-left: 0;
+  margin-top: 1px;
+  border-color: var(--cds-border, var(--remote-line)) !important;
+  color: var(--cds-text-secondary, var(--remote-secondary)) !important;
+}
+.remote-attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Expanded, the list can hold every waiting session on the fleet. Without a
+   * ceiling it grows until the drill-down below is pushed off screen - the
+   * strip would then hide the very sidebar it was added to. `min-height: 0`
+   * is what lets a flex child shrink and scroll instead of overflowing. */
+  max-height: 46vh;
+  /* Both axes are pinned deliberately: `overflow-y: auto` alone computes
+   * `overflow-x` to `auto` as well, so a child a pixel too wide sprouts a
+   * horizontal scrollbar across the whole strip. The strip never scrolls
+   * sideways - long commands truncate instead. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  min-height: 0;
+  /* 展开到十几条时会出现滚动条。Chromium 的原生滚动条在 300px 的窄栏里要占
+   * 掉 8px 并且画成一条高对比的灰槽，比整块卡片任何一条边都显眼。这里对齐
+   * 时间线自己的做法（thin + 5px + 半透明拇指），并留出稳定槽位，避免
+   * 内容在"有没有滚动条"两种状态之间左右跳 8px。 */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--cds-border-strong, var(--remote-line-strong))
+    transparent;
+}
+.remote-attention-list::-webkit-scrollbar {
+  width: 5px;
+}
+.remote-attention-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.remote-attention-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--cds-border-strong, var(--remote-line-strong));
+}
+.remote-attention-list::-webkit-scrollbar-thumb:hover {
+  background: var(--cds-text-muted, var(--remote-muted));
+}
+.remote-attention-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 3px 0;
+  border-radius: var(--radius-lg, 10px);
+  /* Rows must keep their own height when the list is clipped. Without this
+   * the flex column shrinks every item to fit the ceiling instead of letting
+   * the list scroll, and the strip turns twelve rows into twelve stripes. */
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    transform 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.remote-attention-item:hover {
+  background: var(--cds-alpha-1, var(--remote-hover));
+  border-color: var(--cds-border, var(--remote-line));
+  /* The sidebar's own lift, so the strip moves like the rows beneath it. */
+  transform: translateY(-0.5px);
+}
+.remote-attention-item:active {
+  transform: scale(0.995);
+}
+/* The row is a button reset — the console's global button rule would
+ * otherwise draw a second border inside the item's own. */
+.remote-attention-item .remote-attention-row {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 8px !important;
+  border: none !important;
+  border-radius: var(--radius-lg, 10px) !important;
+  background: transparent !important;
+  text-align: left;
+  cursor: pointer;
+}
+.remote-attention-item .remote-attention-row:hover {
+  background: transparent !important;
+}
+.remote-attention-item .remote-attention-row:focus-visible {
+  outline: 2px solid var(--cds-clay, #d97757);
+  outline-offset: -2px;
+}
+.remote-attention-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cds-text-muted, var(--remote-muted));
+  /* The same soft halo the console uses for live dots: colour without a
+   * saturated fill that would fight the title next to it. */
+  box-shadow: 0 0 0 2.5px var(--cds-alpha-1, var(--remote-hover));
+}
+.remote-attention-dot[data-state="awaiting_permission"] {
+  background: var(--cds-clay, var(--remote-terracotta));
+  box-shadow: 0 0 0 2.5px var(--cds-clay-soft, var(--remote-terracotta-soft));
+}
+/* 琥珀色在浅色底上偏亮（#fbbf24 对 #fcfcfb 只有 1.6:1），白点本体看不清；
+ * 靠一圈更实的描边把它从底面上拎出来，深色模式沿用原样即可。 */
+.remote-attention-dot[data-state="awaiting_input"] {
+  background: var(--remote-amber);
+  box-shadow:
+    0 0 0 1px rgba(180, 83, 9, 0.55),
+    0 0 0 2.5px rgba(217, 119, 6, 0.14);
+}
+:root[data-theme="dark"] .remote-attention-dot[data-state="awaiting_input"] {
+  box-shadow: 0 0 0 2.5px rgba(217, 119, 6, 0.14);
+}
+.remote-attention-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.remote-attention-session {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  transition: color 0.12s ease;
+}
+.remote-attention-item:hover .remote-attention-session {
+  color: var(--cds-text-primary, var(--remote-ink));
+}
+.remote-attention-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+.remote-attention-state {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--cds-text-muted, var(--remote-muted));
+  white-space: nowrap;
+}
+.remote-attention-state[data-state="awaiting_permission"] {
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+}
+/* Inline approval rows: the command on the left, the two decisions on the
+ * right. The command truncates rather than wraps so a long path cannot push
+ * the buttons off the strip. */
+.remote-attention-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 8px 8px 23px;
+}
+/* Two lines, not one. In a 300px rail an inline command plus two decisions
+ * left the command 165px of the 290px it needed, so every approval read as
+ * "Bash · cargo test --". Stacking gives the command the full width and puts
+ * the decisions underneath it, right-aligned where the eye goes next. */
+.remote-attention-approval {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* 左竖线 + 等宽字，而不是一条铺满宽度的实心代码条。
+ *
+ * 实心底色把每一行审批变成一块米色砖：两条审批就是两块，压在深色侧栏里
+ * 比会话标题还显眼，重心整个塌到下面。换成 2px 竖线之后，它读起来是
+ * "这段命令从属于上面那条会话"，视觉重量降下来，命令本身反而更清楚 ——
+ * 因为不再需要和底色抢对比度，可以用 secondary 色（10:1）而不是主文字色。 */
+.remote-attention-approval-text {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 0 1px 8px;
+  border-left: 2px solid var(--cds-border-strong, var(--remote-line-strong));
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+}
+.remote-attention-approval-actions {
+  display: inline-flex;
+  align-self: flex-end;
+  gap: 4px;
+}
+/* Both decisions are outlined at rest. A filled clay button next to a 12px
+ * monospace command drew more attention than the thing being approved — the
+ * strip has to read "here is what it wants to run", then "approve or not".
+ * Hover is what fills them in. 26px is the sidebar's own compact scale: the
+ * timeline's 38px buttons belong to a full-width column, not a 300px rail. */
+.remote-attention-approve,
+.remote-attention-decline {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  /* 32px，不是注释里原先自称的"32px+"、实际却是 26px。
+   * 26px 在触控板上已经要瞄准，在手机上直接是误触制造机；侧栏的行高是
+   * 40px，32px 的按钮放进去仍然留得住呼吸，同时踩到可点区域的下限。 */
+  min-height: 32px;
+  padding: 0 12px !important;
+  border-radius: 8px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  cursor: pointer;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.remote-attention-approve {
+  border: 1px solid rgba(217, 119, 87, 0.45) !important;
+  background: transparent !important;
+  color: var(--cds-clay-ink, var(--remote-terracotta-hover)) !important;
+}
+/* 悬停时填成深陶土而不是品牌陶土：#d97757 配白字只有 3.1:1，hover 一压上去
+ * 反而比静止态更难读。深一档的底色配白字是 5.8:1，且仍是同一个色相。 */
+.remote-attention-approve:hover:not(:disabled) {
+  border-color: transparent !important;
+  background: var(--cds-clay-ink, var(--remote-terracotta)) !important;
+  color: #ffffff !important;
+  transform: translateY(-0.5px);
+}
+/* 暗色模式反过来：`--cds-clay-ink` 在暗底是"提亮"档（#e08264），拿它当填充色
+ * 配白字只剩 2.8:1，比静止态更糊。深色界面里按钮本来就该是"发光"而不是"压暗"，
+ * 所以这里填一层半透明陶土、文字继续用提亮的陶土色：合成底 rgb(64,43,36) 上
+ * 5.5:1，既亮又不刺眼。 */
+:root[data-theme="dark"] .remote-attention-approve:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--cds-clay) 22%, transparent) !important;
+  color: var(--cds-clay-ink, var(--remote-terracotta-hover)) !important;
+}
+.remote-attention-approve:active:not(:disabled) {
+  transform: scale(0.97);
+}
+/* Decline keeps the red the timeline's own decline button uses, so "no" reads
+ * the same in both places instead of turning into a neutral grey here.
+ * `--remote-red` is the theme-aware pair (#dc2626 light / #f87171 dark); the
+ * literal colour it replaced measured 3.8:1 on the dark surface, under AA. */
+.remote-attention-decline {
+  border: 1px solid color-mix(in srgb, var(--remote-red) 35%, transparent) !important;
+  background: transparent !important;
+  color: var(--remote-red) !important;
+}
+/* 悬停加深的是 "字"，不是 "底"。
+ *
+ * 一开始按常规思路把红底加浓，结果越加越糊：红字压在红底上，两者同色相，
+ * 底一深字就跟着沉下去（10% 洗 → 3.8:1，18% 洗 → 3.1:1）。同色相的底和字
+ * 之间拉不开亮度差，这是加多少浓度都救不回来的。
+ *
+ * 反过来才对：底只做极轻的一层提亮（8%），把文字颜色本身压深一档。
+ * 浅色模式 6.4:1，深色模式仍走 --remote-red 的 #f87171（6.8:1）。
+ * 状态变化靠明度表达，而不是靠饱和度堆叠。 */
+.remote-attention-decline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--remote-red) 8%, transparent) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--remote-red) 55%,
+    transparent
+  ) !important;
+  color: color-mix(in srgb, var(--remote-red) 82%, black) !important;
+  transform: translateY(-0.5px);
+}
+:root[data-theme="dark"] .remote-attention-decline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--remote-red) 12%, transparent) !important;
+  color: var(--remote-red) !important;
+}
+.remote-attention-decline:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.remote-attention-approve:disabled,
+.remote-attention-decline:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .remote-attention-item,
+  .remote-attention-item:hover,
+  .remote-attention-item:active,
+  .remote-attention-approve,
+  .remote-attention-approve:hover:not(:disabled),
+  .remote-attention-approve:active:not(:disabled),
+  .remote-attention-decline,
+  .remote-attention-decline:active:not(:disabled) {
+    transform: none;
+    transition: none;
+  }
+}
+/* Qoder-inspired visual Agent card grid & Bottom Sheet ergonomics */
+.remote-launch-handle {
+  display: none;
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--remote-line-strong);
+  margin: -6px auto 12px;
+}
+.remote-launch-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.remote-launch .remote-launch-agent-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--remote-line);
+  background: var(--remote-bg);
+  color: var(--remote-ink);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    transform 0.16s ease;
+}
+.remote-launch .remote-launch-agent-card:hover {
+  border-color: var(--remote-line-strong);
+  transform: translateY(-1px);
+}
+.remote-launch .remote-launch-agent-card.active {
+  border-color: var(--remote-terracotta);
+  background: var(--remote-terracotta-soft);
+  box-shadow: inset 0 0 0 1px var(--remote-terracotta);
+}
+.remote-launch-agent-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--remote-surface);
+  color: var(--remote-secondary);
+}
+.remote-launch .remote-launch-agent-card.active .remote-launch-agent-icon {
+  background: var(--remote-terracotta);
+  color: #ffffff;
+}
+[data-theme="dark"]
+  .remote-launch
+  .remote-launch-agent-card.active
+  .remote-launch-agent-icon {
+  color: #0b1710;
+}
+.remote-launch-agent-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-launch-row-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.remote-launch .remote-launch-advanced-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--remote-line);
+  background: transparent;
+  color: var(--remote-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.remote-launch .remote-launch-advanced-toggle:hover {
+  border-color: var(--remote-line-strong);
+  color: var(--remote-ink);
+}
+.remote-launch-advanced-panel {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--remote-line);
+  background: var(--remote-bg);
+}
+@media (max-width: 768px) {
+  .remote-launch-handle {
+    display: block;
+  }
+
+  .remote-launch-row-2 {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .remote-welcome {
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  }
+}
+/* Qoder Mobile thumb-zone floating "+ 新任务" capsule FAB on welcome screen */
+.remote-mobile-fab {
+  position: fixed;
+  right: 18px;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  z-index: 25;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 48px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 999px;
+  background: var(--remote-terracotta);
+  color: #ffffff;
+  font-size: 14.5px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(16, 40, 28, 0.24);
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+[data-theme="dark"] .remote-mobile-fab {
+  color: #0b1710;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.48);
+}
+.remote-mobile-fab:active {
+  transform: scale(0.97);
+}

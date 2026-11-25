@@ -156,29 +156,39 @@ class SessionTranscriptTest {
     }
 
     @Test
-    fun `a bare tool JSON delta becomes one tool card merged with its completion`() {
-        val call =
-            """{"command":"cargo test","description":"Run tests"}"""
-        val events =
-            listOf(
-                delta("tool-1", call),
+    fun `a bare tool JSON delta retains its display key when the real event arrives`() {
+        val call = """{"command":"cargo test","description":"Run tests"}"""
+        val provisional = delta("tool-1", call)
+        for (completedId in listOf("tool-1", "command-1")) {
+            val done =
                 completed(
                     JSONObject()
-                        .put("id", "tool-1")
+                        .put("id", completedId)
                         .put("type", "commandExecution")
                         .put("command", "cargo test")
                         .put("output", "ok")
                         .put("status", "completed"),
-                ),
-            )
-
-        val items = buildTranscript(events, emptyList(), "hub-one")
-
-        assertEquals(1, items.size)
-        assertEquals(TranscriptKind.TOOL, items.single().kind)
-        assertEquals("cargo test", items.single().command)
-        assertEquals("ok", items.single().output)
-        assertEquals(ToolState.COMPLETED, items.single().state)
+                    cursor = 2,
+                )
+            val fold = IncrementalTranscriptFold()
+            val opened = fold.update(listOf(provisional), emptyList(), "hub-one", live = true).single()
+            val events = listOf(provisional, done)
+            val items = fold.update(events, emptyList(), "hub-one", live = false)
+            val tool = items.single()
+            assertEquals(buildTranscript(events, emptyList(), "hub-one"), items)
+            assertEquals(completedId, tool.id)
+            assertEquals(opened.displayKey, tool.displayKey)
+            assertEquals(TranscriptKind.TOOL, tool.kind)
+            assertEquals("cargo test", tool.command)
+            assertEquals("ok", tool.output)
+            assertEquals(ToolState.COMPLETED, tool.state)
+            if (completedId != "tool-1") {
+                val reused = events + delta("tool-1", call, cursor = 3)
+                val revised = fold.update(reused, emptyList(), "hub-one", live = true)
+                assertEquals(buildTranscript(reused, emptyList(), "hub-one", live = true), revised)
+                assertEquals(2, revised.map { it.displayKey }.distinct().size)
+            }
+        }
     }
 
     @Test
@@ -338,7 +348,9 @@ class SessionTranscriptTest {
                                     .put("status", "accepted")
                                     .put(
                                         "result",
-                                        JSONObject().put("approval_id", "approval-a"),
+                                        JSONObject()
+                                            .put("approval_id", "approval-a")
+                                            .put("response_sent", true),
                                     ),
                             ),
                     ),

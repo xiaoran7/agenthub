@@ -1,11 +1,13 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::types::{
     DEFAULT_PLUGIN_REGISTRY_URL, InstalledPluginRecord, PluginStateFile, RegistryDocument,
@@ -98,38 +100,128 @@ impl PluginStore {
             .to_string()
     }
 
+    /// Deduplicates corrupt backups by content SHA-256 prefix so repeated reads of
+    /// the same corrupt `state.json` never create a backup file storm on disk.
+    fn backup_corrupt_state(&self, raw: &str) {
+        let digest = hex::encode(Sha256::digest(raw.as_bytes()));
+        let backup = self
+            .root
+            .join(format!("state.corrupt.{}.json", &digest[..12]));
+        if backup.exists() {
+            return;
+        }
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+        {
+            let _ = file.write_all(raw.as_bytes());
+        }
+    }
+
     pub fn load_state(&self) -> PluginStateFile {
+        match self.load_state_inner(false) {
+            Ok(state) => state,
+            Err(err) => {
+                eprintln!("[PluginStore] {err}; returning empty view without overwriting state");
+                PluginStateFile::default()
+            }
+        }
+    }
+
+    pub fn load_state_for_write(&self) -> Result<PluginStateFile, String> {
+        self.load_state_inner(true)
+    }
+
+    fn load_state_inner(&self, create_corrupt_backup: bool) -> Result<PluginStateFile, String> {
         let path = self.state_path();
-        let Ok(raw) = fs::read_to_string(&path) else {
-            return PluginStateFile::default();
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PluginStateFile::default());
+            }
+            Err(err) => return Err(format!("read_plugin_state:{err}")),
         };
-        let mut parsed: PluginStateFile = serde_json::from_str(&raw).unwrap_or_default();
+        let mut parsed: PluginStateFile = match serde_json::from_str(&raw) {
+            Ok(state) => state,
+            Err(err) => {
+                if create_corrupt_backup {
+                    self.backup_corrupt_state(&raw);
+                }
+                return Err(format!("corrupt_plugin_state:{err}"));
+            }
+        };
         // Prune records whose directory disappeared from disk so state.json stays truthful.
         parsed.installed.retain(|id, rec| {
             validate_plugin_id(id).is_ok() && Path::new(&rec.install_dir).is_dir()
         });
-        parsed
+        Ok(parsed)
+    }
+
+    fn atomic_write(&self, target: &Path, prefix: &str, payload: &[u8]) -> Result<(), String> {
+        self.ensure_dirs()?;
+        let parent = target.parent().unwrap_or(&self.root);
+        let mut tmp = tempfile::Builder::new()
+            .prefix(&format!("{prefix}."))
+            .suffix(".tmp")
+            .tempfile_in(parent)
+            .map_err(|e| format!("create_{prefix}_tmp:{e}"))?;
+        tmp.as_file_mut()
+            .write_all(payload)
+            .map_err(|e| format!("write_{prefix}_tmp:{e}"))?;
+        tmp.as_file()
+            .sync_all()
+            .map_err(|e| format!("sync_{prefix}_tmp:{e}"))?;
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+            };
+
+            let temp_path = tmp.into_temp_path();
+            let temp_wide: Vec<u16> = temp_path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let target_wide: Vec<u16> = target
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let moved = unsafe {
+                MoveFileExW(
+                    temp_wide.as_ptr(),
+                    target_wide.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if moved == 0 {
+                let err = std::io::Error::last_os_error();
+                let _ = temp_path.close();
+                return Err(format!("rename_{prefix}:{err}"));
+            }
+            let _ = temp_path.keep();
+        }
+
+        #[cfg(not(windows))]
+        {
+            tmp.persist(target)
+                .map_err(|e| format!("rename_{prefix}:{}", e.error))?;
+            if let Ok(dir_handle) = fs::File::open(parent) {
+                let _ = dir_handle.sync_all();
+            }
+        }
+
+        Ok(())
     }
 
     pub fn save_state(&self, state: &PluginStateFile) -> Result<(), String> {
-        self.ensure_dirs()?;
-        let path = self.state_path();
-        let tmp = self.root.join(format!(
-            "state.{}.{}.tmp",
-            std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        ));
         let payload =
             serde_json::to_vec_pretty(state).map_err(|e| format!("serialize_plugin_state:{e}"))?;
-        fs::write(&tmp, payload).map_err(|e| format!("write_plugin_state_tmp:{e}"))?;
-        if let Err(err) = fs::rename(&tmp, &path) {
-            let _ = fs::remove_file(&path);
-            fs::rename(&tmp, &path).map_err(|e| {
-                let _ = fs::remove_file(&tmp);
-                format!("rename_plugin_state:{err}/{e}")
-            })?;
-        }
-        Ok(())
+        self.atomic_write(&self.state_path(), "state", &payload)
     }
 
     pub fn load_cached_registry(
@@ -166,7 +258,6 @@ impl PluginStore {
         registry_url: &str,
         document: &RegistryDocument,
     ) -> Result<(), String> {
-        self.ensure_dirs()?;
         let cache = RegistryCacheFile {
             fetched_at_ms: Utc::now().timestamp_millis(),
             registry_url: registry_url.to_string(),
@@ -174,7 +265,7 @@ impl PluginStore {
         };
         let payload =
             serde_json::to_vec_pretty(&cache).map_err(|e| format!("serialize_cache:{e}"))?;
-        fs::write(self.registry_cache_path(), payload).map_err(|e| format!("write_cache:{e}"))
+        self.atomic_write(&self.registry_cache_path(), "registry-cache", &payload)
     }
 
     pub fn read_icon(&self, record: &InstalledPluginRecord) -> Option<(Vec<u8>, &'static str)> {

@@ -1,7 +1,15 @@
 package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,13 +17,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -29,22 +39,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.agentplatform.mobile.data.AttachmentReader
-import com.agentplatform.mobile.data.CatalogModel
 import com.agentplatform.mobile.data.ComposerMode
 import com.agentplatform.mobile.data.EffortLevel
+import com.agentplatform.mobile.data.EngineKind
 import com.agentplatform.mobile.data.ExecutionState
-import com.agentplatform.mobile.data.PermissionMode
 import com.agentplatform.mobile.data.RemoteAttachment
 import com.agentplatform.mobile.data.SessionPhase
-import com.agentplatform.mobile.data.matchCatalogModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -57,19 +65,36 @@ internal fun RemoteSessionTopBar(
     titleText: String,
     deviceTitle: String,
     runtimeLabel: String,
+    engine: EngineKind = EngineKind.CODEX,
     hostOnline: Boolean,
     controlConnected: Boolean,
     state: ExecutionState,
-    stoppable: Boolean,
-    sending: Boolean,
+    actionsEnabled: Boolean,
     sessionIdDisplay: String,
-    usage: ContextUsage?,
+    hasUsage: Boolean,
+    showUsage: Boolean,
+    showQuickKeys: Boolean,
     onBack: () -> Unit,
     onToggleUsage: () -> Unit,
-    onInterrupt: () -> Unit,
+    onToggleQuickKeys: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
-    var copiedHeaderId by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var copiedHeaderId by remember(sessionIdDisplay) { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    val stateLabel =
+        when {
+            !hostOnline -> "设备离线"
+            !controlConnected -> "控制未连接"
+            else -> state.label
+        }
+    val indicatorColor =
+        when {
+            !hostOnline -> colors.onSurfaceVariant
+            !controlConnected -> OrcaColors.accentAmber
+            else -> stateColorOf(state)
+        }
 
     LaunchedEffect(copiedHeaderId) {
         if (copiedHeaderId) {
@@ -78,110 +103,114 @@ internal fun RemoteSessionTopBar(
         }
     }
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
     ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = OrcaSpace.sm, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        ChatRoundAction(label = "返回会话列表", onClick = onBack) {
+            OrcaBackChevron(colors.onSurface, 20.dp)
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            OrcaIconButton(onClick = onBack) {
-                OrcaBackChevron(MaterialTheme.colorScheme.onSurface, 18.dp)
-            }
-            Column(
-                modifier = Modifier.weight(1f).padding(horizontal = OrcaSpace.xs),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            Text(
+                text = titleText,
+                style = MaterialTheme.typography.titleLarge,
+                color = colors.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                modifier = Modifier.semantics { contentDescription = "$deviceTitle · $runtimeLabel · $stateLabel" },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                AgentBrandIcon(
+                    engine = engine,
+                    reportedProvider = runtimeLabel,
+                    size = 14.dp,
+                )
                 Text(
-                    text = titleText,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    text = "$deviceTitle · $runtimeLabel",
+                    modifier = Modifier.weight(1f, fill = false),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-                ) {
-                    Text(
-                        text = "$deviceTitle · $runtimeLabel",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    val pillColor =
-                        when {
-                            !hostOnline -> OrcaColors.textMuted
-                            !controlConnected -> OrcaColors.accentAmber
-                            else -> stateColorOf(state)
-                        }
-                    Surface(
-                        shape = RoundedCornerShape(OrcaRadius.pill),
-                        color = pillColor.copy(alpha = 0.14f),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            OrcaStatusDot(color = pillColor, size = 5.dp)
-                            Text(
-                                text =
-                                    when {
-                                        !hostOnline -> "电脑离线"
-                                        !controlConnected -> "控制断开"
-                                        else -> state.label
-                                    },
-                                style = OrcaType.mono.copy(fontSize = 10.sp),
-                                color = pillColor,
-                                maxLines = 1,
-                            )
-                        }
-                    }
-                }
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                OrcaTextAction(label = if (copiedHeaderId) "已复制" else "会话ID") {
-                    clipboard.setText(AnnotatedString(sessionIdDisplay))
-                    copiedHeaderId = true
-                }
-                if (usage != null) {
-                    ContextCapacityRing(usage = usage, onToggle = onToggleUsage)
-                }
-                if (stoppable) {
-                    Surface(
-                        onClick = onInterrupt,
-                        modifier = Modifier.minimumInteractiveComponentSize().heightIn(min = 34.dp),
-                        enabled = !sending,
-                        shape = RoundedCornerShape(OrcaRadius.pill),
-                        color = OrcaColors.accentRed.copy(alpha = 0.12f),
-                        border = BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.4f)),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
-                        ) {
-                            OrcaStopIcon(OrcaColors.accentRed, 8.dp)
-                            Text(
-                                text = "停止",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = OrcaColors.accentRed,
-                            )
-                        }
-                    }
-                }
+                OrcaStatusDot(indicatorColor, 6.dp)
             }
         }
+        Box {
+            ChatRoundAction(label = "会话操作", onClick = { menuOpen = true }) {
+                Canvas(Modifier.size(20.dp)) {
+                    for (position in listOf(0.2f, 0.5f, 0.8f)) {
+                        drawCircle(colors.onSurface, radius = 1.8.dp.toPx(), center = Offset(size.width * position, center.y))
+                    }
+                }
+            }
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (copiedHeaderId) "已复制会话 ID" else "复制会话 ID") },
+                    onClick = {
+                        clipboard.setText(AnnotatedString(sessionIdDisplay))
+                        copiedHeaderId = true
+                        menuOpen = false
+                    },
+                )
+                if (hasUsage) {
+                    DropdownMenuItem(
+                        text = { Text(if (showUsage) "隐藏上下文用量" else "显示上下文用量") },
+                        onClick = {
+                            menuOpen = false
+                            onToggleUsage()
+                        },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text(if (showQuickKeys) "隐藏快捷键" else "显示快捷键") },
+                    enabled = actionsEnabled || showQuickKeys,
+                    onClick = {
+                        menuOpen = false
+                        onToggleQuickKeys()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("会话设置") },
+                    onClick = {
+                        menuOpen = false
+                        onOpenSettings()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ChatRoundAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.size(48.dp).semantics { contentDescription = label },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 1.dp,
+    ) {
+        Box(contentAlignment = Alignment.Center) { content() }
     }
 }
 
@@ -293,15 +322,9 @@ internal fun RemoteBottomConsoleDock(
     render: SessionPhase,
     mode: ComposerMode,
     sending: Boolean,
-    modelOptions: List<CatalogModel>,
-    model: String,
-    initialModel: CatalogModel?,
-    modelExplicitlyCleared: Boolean,
-    effort: EffortLevel,
-    permissionMode: PermissionMode,
+    canInterrupt: Boolean,
+    hostOnline: Boolean,
     showQuickKeys: Boolean,
-    onToggleQuickKeys: () -> Unit,
-    onOpenSettingsSheet: () -> Unit,
     queuedPrompt: QueuedPromptDraft?,
     onEditQueue: (QueuedPromptDraft) -> Unit,
     onCancelQueue: () -> Unit,
@@ -311,146 +334,97 @@ internal fun RemoteBottomConsoleDock(
     attachmentNotice: String?,
     draft: String,
     onDraftChange: (String) -> Unit,
+    effort: EffortLevel = EffortLevel.DEFAULT,
+    onEffortChange: ((EffortLevel) -> Unit)? = null,
     onSend: () -> Unit,
     onQueue: () -> Unit,
     onAttach: (List<android.net.Uri>) -> Unit,
+    onAttachmentError: (String) -> Unit = {},
+    onInterrupt: () -> Unit,
     onKey: (String) -> Unit,
     onMacro: (String) -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(vertical = OrcaSpace.xs),
-        ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = OrcaSpace.xs)) {
+        if (!hostOnline) {
             Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = OrcaSpace.md, vertical = 2.dp),
+                modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
             ) {
-                val displayModel =
-                    if (model.isNotBlank()) {
-                        matchCatalogModel(modelOptions, model)?.label ?: model
-                    } else if (!modelExplicitlyCleared) {
-                        initialModel?.label.orEmpty()
-                    } else {
-                        ""
-                    }
-                val parameterLabel =
-                    listOfNotNull(
-                        displayModel.takeIf { it.isNotBlank() },
-                        effort.label.takeIf { effort != EffortLevel.DEFAULT },
-                        permissionMode.label.takeIf { permissionMode != PermissionMode.DEFAULT },
-                    ).joinToString(" · ").ifBlank { "默认配置" }
-                Surface(
-                    onClick = onOpenSettingsSheet,
-                    enabled = render.connected && !sending,
-                    modifier = Modifier.minimumInteractiveComponentSize(),
-                    shape = RoundedCornerShape(OrcaRadius.pill),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.8f)),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        OrcaSettingsIcon(OrcaColors.accentBlue, 13.dp)
-                        Text(
-                            text = parameterLabel,
-                            style = OrcaType.mono.copy(fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 220.dp),
-                        )
-                        OrcaChevronDown(MaterialTheme.colorScheme.onSurfaceVariant, 10.dp)
-                    }
-                }
-
-                Surface(
-                    onClick = onToggleQuickKeys,
-                    enabled = render.connected && !sending,
-                    modifier = Modifier.minimumInteractiveComponentSize(),
-                    shape = RoundedCornerShape(OrcaRadius.pill),
-                    color =
-                        if (showQuickKeys) OrcaColors.accentBlue.copy(alpha = 0.14f)
-                        else Color.Transparent,
-                    border =
-                        BorderStroke(
-                            1.dp,
-                            if (showQuickKeys) OrcaColors.accentBlue.copy(alpha = 0.6f)
-                            else MaterialTheme.colorScheme.outline,
-                        ),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        OrcaTerminalIcon(
-                            if (showQuickKeys) OrcaColors.accentBlue
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            12.dp,
-                        )
-                        Text(
-                            text = "快捷键",
-                            style = OrcaType.mono.copy(fontSize = 11.sp),
-                            color =
-                                if (showQuickKeys) OrcaColors.accentBlue
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-
-            queuedPrompt?.let { currentQueue ->
-                QueuedPromptBar(
-                    queued = currentQueue,
-                    canSendNow = mode == ComposerMode.READY && !sending,
-                    onEdit = { onEditQueue(currentQueue) },
-                    onCancel = onCancelQueue,
-                    onSendNow = { onSendQueueNow(currentQueue) },
+                val color = MaterialTheme.colorScheme.onSurfaceVariant
+                OrcaMonitorIcon(color, 16.dp)
+                Text(
+                    text = "设备离线，连接恢复后继续同步。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = color,
                 )
             }
+        }
 
-            AttachmentChips(
-                attachments = attachments,
-                onRemove = onRemoveAttachment,
-            )
-            attachmentNotice?.let { notice ->
-                AttachmentNotice(
-                    message = notice,
-                    modifier =
-                        Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.xxs),
-                )
-            }
-
-            AnimatedVisibility(visible = showQuickKeys) {
-                TerminalAccessoryBar(
-                    enabled = render.connected && !sending,
-                    onKey = onKey,
-                    onMacro = onMacro,
-                )
-            }
-
-            Composer(
-                draft = draft,
-                onDraftChange = onDraftChange,
-                mode = mode,
-                hint = if (mode == ComposerMode.TAKE_CONTROL) "输入消息，发送时接管会话" else render.hint,
-                sending = sending,
-                hasAttachments = attachments.isNotEmpty(),
-                onSend = onSend,
-                onQueue = onQueue,
-                onAttach = onAttach,
+        queuedPrompt?.let { currentQueue ->
+            QueuedPromptBar(
+                queued = currentQueue,
+                canSendNow = mode == ComposerMode.READY && !sending,
+                onEdit = { onEditQueue(currentQueue) },
+                onCancel = onCancelQueue,
+                onSendNow = { onSendQueueNow(currentQueue) },
             )
         }
+
+        AttachmentChips(
+            attachments = attachments,
+            onRemove = onRemoveAttachment,
+        )
+        attachmentNotice?.let { notice ->
+            AttachmentNotice(
+                message = notice,
+                modifier =
+                    Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.xxs),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showQuickKeys,
+            enter =
+                expandVertically(
+                    animationSpec = tween(MotionTokens.Quick),
+                    expandFrom = Alignment.Bottom,
+                ) + fadeIn(tween(MotionTokens.Quick)),
+            exit =
+                shrinkVertically(
+                    animationSpec = tween(MotionTokens.Quick),
+                    shrinkTowards = Alignment.Bottom,
+                ) + fadeOut(tween(MotionTokens.Quick)),
+        ) {
+            TerminalAccessoryBar(
+                enabled = render.connected && !sending,
+                onKey = onKey,
+                onMacro = onMacro,
+            )
+        }
+
+        Composer(
+            draft = draft,
+            onDraftChange = onDraftChange,
+            mode = mode,
+            hint =
+                when (mode) {
+                    ComposerMode.BLOCKED -> if (hostOnline) "控制未连接" else "设备离线"
+                    ComposerMode.BUSY -> "输入下一条消息…"
+                    ComposerMode.READY, ComposerMode.TAKE_CONTROL -> "输入消息…"
+                },
+            sending = sending,
+            hasAttachments = attachments.isNotEmpty(),
+            effort = effort,
+            onEffortChange = onEffortChange,
+            onSend = onSend,
+            onQueue = onQueue,
+            onAttach = onAttach,
+            onAttachmentError = onAttachmentError,
+            stoppable = render.stoppable,
+            canInterrupt = canInterrupt,
+            onInterrupt = onInterrupt,
+        )
     }
 }
 
@@ -470,8 +444,23 @@ internal fun RemoteTranscriptArea(
     canScrollDown: Boolean,
 ) {
     val scope = rememberCoroutineScope()
+    var activeToolGroup by remember { mutableStateOf<String?>(null) }
+    val activeTools = remember(blocks, activeToolGroup) {
+        val selected = activeToolGroup
+        if (selected == null) null
+        else blocks.firstNotNullOfOrNull { block ->
+            when (block) {
+                is ConversationBlock.Single ->
+                    block.item.takeIf { it.displayKey == selected && it.kind == TranscriptKind.TOOL }?.let { listOf(it) }
+                is ConversationBlock.Tools -> block.items.takeIf { tools -> tools.any { it.displayKey == selected } }
+            }
+        }
+    }
+    if (activeTools != null) {
+        ToolActivitySheet(items = activeTools, onDismiss = { activeToolGroup = null })
+    }
     Box(modifier = modifier.fillMaxWidth()) {
-        if (!seeded && seedError.isBlank()) {
+        if (!seeded && blocks.isEmpty() && seedError.isBlank()) {
             Column(
                 modifier =
                     Modifier
@@ -488,8 +477,8 @@ internal fun RemoteTranscriptArea(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding =
-                    PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
-                verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+                    PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.md),
+                verticalArrangement = Arrangement.spacedBy(OrcaSpace.md),
             ) {
                 if (blocks.isEmpty()) {
                     item {
@@ -503,10 +492,11 @@ internal fun RemoteTranscriptArea(
                 }
                 items(
                     blocks,
-                    key = { block ->
+                    key = { it.displayKey },
+                    contentType = { block ->
                         when (block) {
-                            is ConversationBlock.Single -> block.item.id
-                            is ConversationBlock.Tools -> "group:" + block.items.first().id
+                            is ConversationBlock.Single -> block.item.kind.name
+                            is ConversationBlock.Tools -> TranscriptKind.TOOL.name
                         }
                     },
                 ) { block ->
@@ -521,11 +511,13 @@ internal fun RemoteTranscriptArea(
                                                 block.item.id.startsWith("pending:"),
                                     )
                                 TranscriptKind.ASSISTANT ->
-                                    AssistantMessage(block.item, agentLabel = runtimeLabel)
-                                TranscriptKind.TOOL -> ToolCard(block.item)
+                                    AssistantMessage(block.item)
+                                TranscriptKind.TOOL ->
+                                    ToolActivitySummary(items = listOf(block.item)) { activeToolGroup = block.displayKey }
                                 TranscriptKind.SYSTEM -> SystemLine(block.item)
                             }
-                        is ConversationBlock.Tools -> ToolGroup(block.items)
+                        is ConversationBlock.Tools ->
+                            ToolActivitySummary(items = block.items) { activeToolGroup = block.displayKey }
                     }
                 }
                 if (isWaitingFirstAssistant) {
@@ -536,25 +528,33 @@ internal fun RemoteTranscriptArea(
             }
         }
 
-        if (canScrollDown && blocks.isNotEmpty()) {
+        AnimatedVisibility(
+            visible = canScrollDown && blocks.isNotEmpty(),
+            modifier =
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = OrcaSpace.lg, bottom = OrcaSpace.sm),
+            enter =
+                fadeIn(tween(MotionTokens.Quick)) +
+                    slideInVertically(tween(MotionTokens.Standard)) { it / 2 },
+            exit =
+                fadeOut(tween(MotionTokens.Quick)) +
+                    slideOutVertically(tween(MotionTokens.Quick)) { it / 2 },
+        ) {
             Surface(
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(blocks.lastIndex, scrollOffset = 100_000)
                     }
                 },
-                modifier =
-                    Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = OrcaSpace.lg, bottom = OrcaSpace.sm)
-                        .minimumInteractiveComponentSize(),
+                modifier = Modifier.minimumInteractiveComponentSize(),
                 shape = RoundedCornerShape(OrcaRadius.pill),
                 color = OrcaColors.surfaceBright,
                 shadowElevation = 3.dp,
             ) {
                 Text(
                     text = "回到最新 ↓",
-                    style = OrcaType.mono.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = OrcaColors.onBright,
                     modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = 8.dp),
                 )

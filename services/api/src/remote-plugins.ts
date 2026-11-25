@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import type { StatementSync } from "node:sqlite";
 import {
   isValidAgentType,
@@ -13,6 +12,7 @@ import {
 } from "@agent-pulse/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
+import { isSafeHttpsRegistryUrl } from "./remote-plugin-ssrf.js";
 import { RemoteStoreError } from "./remote-store-validation.js";
 
 const PLUGIN_ACTIONS: ReadonlySet<PluginCommandAction> = new Set([
@@ -36,109 +36,6 @@ const RUNTIME_STATUSES: ReadonlySet<PluginRuntimeStatus> = new Set([
   "error",
   "disabled",
 ]);
-
-function isForbiddenIpv4(a: number, b: number): boolean {
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    a >= 224 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127)
-  );
-}
-
-function parseIpv6Groups(ip: string): number[] | null {
-  const noZone = ip.split("%")[0]?.toLowerCase() ?? "";
-  if (!noZone) return null;
-  const dbl = noZone.split("::");
-  if (dbl.length > 2) return null;
-  const parseSide = (part: string): number[] | null => {
-    if (!part) return [];
-    const segs = part.split(":");
-    const out: number[] = [];
-    for (let i = 0; i < segs.length; i += 1) {
-      const seg = segs[i]!;
-      if (seg.includes(".")) {
-        if (i !== segs.length - 1 || isIP(seg) !== 4) return null;
-        const [a, b, c, d] = seg.split(".").map(Number);
-        out.push(((a! << 8) | b!) >>> 0, ((c! << 8) | d!) >>> 0);
-      } else if (/^[0-9a-f]{1,4}$/.test(seg)) {
-        out.push(parseInt(seg, 16));
-      } else {
-        return null;
-      }
-    }
-    return out;
-  };
-  const left = parseSide(dbl[0] ?? "");
-  const right = dbl.length === 2 ? parseSide(dbl[1] ?? "") : [];
-  if (!left || !right) return null;
-  const missing = 8 - (left.length + right.length);
-  if (
-    (dbl.length === 1 && missing !== 0) ||
-    (dbl.length === 2 && missing < 1)
-  ) {
-    return null;
-  }
-  return [...left, ...new Array<number>(missing).fill(0), ...right];
-}
-
-function isForbiddenHost(hostname: string): boolean {
-  const h = hostname
-    .trim()
-    .replace(/^\[|\]$/g, "")
-    .split("%")[0]!
-    .toLowerCase();
-  if (
-    !h ||
-    h === "localhost" ||
-    h.endsWith(".localhost") ||
-    h.endsWith(".local") ||
-    h.endsWith(".internal")
-  ) {
-    return true;
-  }
-  const ipKind = isIP(h);
-  if (ipKind === 4) {
-    const [a, b] = h.split(".").map(Number);
-    return isForbiddenIpv4(a!, b!);
-  }
-  if (ipKind === 6 || h.includes(":")) {
-    const g = parseIpv6Groups(h);
-    if (!g) return true;
-    const zeroHead = g.slice(0, 5).every((v) => v === 0);
-    if (zeroHead && g[5] === 0 && g[6] === 0 && g[7]! <= 1) return true;
-    if (zeroHead && (g[5] === 0xffff || g[5] === 0)) {
-      return isForbiddenIpv4(g[6]! >> 8, g[6]! & 0xff);
-    }
-    const first = g[0]!;
-    return (
-      (first & 0xfe00) === 0xfc00 ||
-      (first & 0xffc0) === 0xfe80 ||
-      (first & 0xff00) === 0xff00
-    );
-  }
-  return false;
-}
-
-function isSafeHttpsRegistryUrl(raw: unknown): raw is string {
-  if (typeof raw !== "string") return false;
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed.length > 1024) return false;
-  try {
-    const u = new URL(trimmed);
-    if (u.username || u.password) return false;
-    if (process.env.AGENTHUB_ALLOW_INSECURE_PLUGIN_REGISTRY === "1") {
-      return u.protocol === "https:" || u.protocol === "http:";
-    }
-    return u.protocol === "https:" && !isForbiddenHost(u.hostname);
-  } catch {
-    return false;
-  }
-}
 
 export function parsePluginActionRequest(body: unknown): PluginActionRequest {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -533,19 +430,22 @@ export function updateSingleRunnerPluginStatus(
   pluginId: string,
   status: AgentPlugin["runtimeStatus"],
   error?: string | null,
-): void {
-  if (!isValidAgentType(pluginId)) return;
+): boolean {
+  if (!isValidAgentType(pluginId)) return false;
   const row = stmt(
     "SELECT registry_url, plugins_json FROM remote_runner_plugins WHERE owner=? AND runner=?",
   ).get(owner, runner) as
     { registry_url: string | null; plugins_json: string } | undefined;
-  if (!row) return;
-  const plugins = normalizePluginList(
-    JSON.parse(row.plugins_json) as unknown,
-    runner,
-  );
+  if (!row) return false;
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(row.plugins_json);
+  } catch {
+    return false;
+  }
+  const plugins = normalizePluginList(parsedJson, runner);
   const target = plugins.find((p) => p.id === pluginId);
-  if (!target) return;
+  if (!target) return false;
   target.runtimeStatus = status;
   target.updatedAt = new Date().toISOString();
   if (error) target.error = error;
@@ -557,6 +457,7 @@ export function updateSingleRunnerPluginStatus(
     row.registry_url ?? undefined,
     plugins,
   );
+  return true;
 }
 
 export interface PluginRouteConn {

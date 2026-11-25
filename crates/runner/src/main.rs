@@ -98,7 +98,7 @@ fn main() -> Result<()> {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("daemon_requires_device_identity"))?;
             let db = db.unwrap_or_else(resolve_default_db_path);
-            let server = resolve_bound_gateway_server();
+            let server = resolve_bound_gateway_server(&device_name_path);
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
@@ -126,7 +126,7 @@ fn main() -> Result<()> {
             }
             let db = db.unwrap_or_else(resolve_default_db_path);
             let identity = runtime_identity.unwrap_or_else(resolve_or_create_default_identity);
-            let server = resolve_bound_gateway_server();
+            let server = resolve_bound_gateway_server(&device_name_path);
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,

@@ -188,16 +188,32 @@ const app = createGatewayApp(options);
 const pruneTimer = setInterval(
   () => {
     const nowIso = new Date().toISOString();
-    void Promise.all([
-      Promise.resolve(store.pruneExpiredData?.(nowIso)).catch(() => {}),
-      Promise.resolve(
-        (
-          accounts as {
-            pruneExpiredData?: (now: string) => void | Promise<void>;
-          }
-        ).pruneExpiredData?.(nowIso),
-      ).catch(() => {}),
-    ]);
+    const tasks: Array<Promise<unknown>> = [];
+    if (store.pruneExpiredData !== undefined) {
+      tasks.push(
+        Promise.resolve(store.pruneExpiredData(nowIso)).catch(
+          (error: unknown) => {
+            app.log.error(error, "store pruneExpiredData failed");
+          },
+        ),
+      );
+    }
+    const accountsPruner = accounts as {
+      pruneExpiredData?: (now: string) => void | Promise<void>;
+    };
+    if (
+      !Object.is(accounts, store) &&
+      accountsPruner.pruneExpiredData !== undefined
+    ) {
+      tasks.push(
+        Promise.resolve(accountsPruner.pruneExpiredData(nowIso)).catch(
+          (error: unknown) => {
+            app.log.error(error, "accounts pruneExpiredData failed");
+          },
+        ),
+      );
+    }
+    void Promise.all(tasks);
   },
   6 * 60 * 60_000,
 );

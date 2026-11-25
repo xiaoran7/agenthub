@@ -1140,7 +1140,10 @@ import {
   matchesSelectedOption,
   mergeMonotonicEvents,
   setBoundedSessionRecord,
+  updateBoundedSessionState,
+  type BoundedSessionState,
 } from "../src/lib/remote-session-state";
+import { parseQuestionData } from "../src/components/RemoteToolCard";
 import { splitThinkingContent } from "../src/components/RemoteMessageCard";
 import {
   isSafeRasterDataUrl,
@@ -1176,13 +1179,34 @@ test("markdown and thinking helpers protect fences, extract multiple blocks, and
   );
 });
 
-test("session-state helpers bound LRU records, filter stale cursors, validate attachment sizes, and strip base64 from attemptKey", () => {
-  const order: string[] = [];
-  let store: Record<string, number> = {};
-  store = setBoundedSessionRecord(store, order, "s1", 1, 2);
-  store = setBoundedSessionRecord(store, order, "s2", 2, 2);
-  store = setBoundedSessionRecord(store, order, "s3", 3, 2);
-  assert.deepEqual(Object.keys(store).sort(), ["s2", "s3"]);
+test("session-state helpers bound LRU records purely under StrictMode double-invoke, filter stale cursors, validate attachment sizes, and strip base64 from attemptKey", () => {
+  let order: readonly string[] = Object.freeze([]);
+  let store: Readonly<Record<string, number>> = Object.freeze({});
+  const r1 = setBoundedSessionRecord(store, order, "s1", 1, 2);
+  store = Object.freeze(r1.next);
+  order = Object.freeze(r1.nextOrder);
+  const r2 = setBoundedSessionRecord(store, order, "s2", 2, 2);
+  store = Object.freeze(r2.next);
+  order = Object.freeze(r2.nextOrder);
+
+  // React StrictMode invokes state updaters twice with identical prev inputs.
+  const firstPass = setBoundedSessionRecord(store, order, "s3", 3, 2);
+  const secondPass = setBoundedSessionRecord(store, order, "s3", 3, 2);
+  assert.deepEqual(firstPass, secondPass);
+  assert.deepEqual(Object.keys(secondPass.next).sort(), ["s2", "s3"]);
+  assert.deepEqual(secondPass.nextOrder, ["s2", "s3"]);
+  assert.deepEqual(secondPass.evictedKeys, ["s1"]);
+  assert.deepEqual(order, ["s1", "s2"]);
+
+  const bounded: BoundedSessionState<number> = {
+    byKey: Object.freeze({ s1: 1, s2: 2 }),
+    order: Object.freeze(["s1", "s2"]),
+  };
+  const u1 = updateBoundedSessionState(bounded, "s3", 3, 2);
+  const u2 = updateBoundedSessionState(bounded, "s3", 3, 2);
+  assert.deepEqual(u1, u2);
+  assert.deepEqual(u1.order, ["s2", "s3"]);
+  assert.equal("s1" in u1.byKey, false);
 
   const e1 = { ...event("turn/started", { turn: { id: "t1" } }), cursor: 10 };
   const e2 = { ...e1, cursor: 15 };
@@ -1218,6 +1242,55 @@ test("session-state helpers bound LRU records, filter stale cursors, validate at
   assert.equal(matchesSelectedOption("Yesterday", "Yes"), false);
   assert.equal(matchesSelectedOption("Yes", "Yes"), true);
   assert.equal(matchesSelectedOption('{"answers":{"q1":"Yes"}}', "Yes"), true);
+  assert.equal(
+    matchesSelectedOption("Yes", undefined as unknown as string),
+    false,
+  );
+  assert.equal(matchesSelectedOption('{"answers":null}', "Yes"), false);
+});
+
+test("parseQuestionData rejects malformed questions JSON and sanitizes non-string optional fields", () => {
+  assert.equal(parseQuestionData(undefined), null);
+  assert.equal(parseQuestionData("not json"), null);
+  assert.equal(parseQuestionData('{"questions":[]}'), null);
+  assert.equal(parseQuestionData('{"questions":[null]}'), null);
+  assert.equal(parseQuestionData('{"questions":[{"question":123}]}'), null);
+  assert.equal(
+    parseQuestionData('{"questions":[{"question":"Pick","options":"bad"}]}'),
+    null,
+  );
+  assert.equal(
+    parseQuestionData('{"questions":[{"question":"Pick","options":[null]}]}'),
+    null,
+  );
+  assert.equal(
+    parseQuestionData(
+      '{"questions":[{"question":"Pick","options":[{"label":99}]}]}',
+    ),
+    null,
+  );
+
+  const parsed = parseQuestionData(
+    JSON.stringify({
+      questions: [
+        {
+          question: "Continue?",
+          header: { unexpected: true },
+          options: [
+            { label: "Yes", description: "Proceed", preview: { bad: 1 } },
+          ],
+          multiSelect: false,
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(parsed, [
+    {
+      question: "Continue?",
+      options: [{ label: "Yes", description: "Proceed" }],
+      multiSelect: false,
+    },
+  ]);
 });
 test("remoteRequest aborts and throws request_timeout when response.text() stalls past timeoutMs", async (t) => {
   const originalFetch = globalThis.fetch;
@@ -1243,4 +1316,203 @@ test("remoteRequest aborts and throws request_timeout when response.text() stall
     () => remoteRequest("/runners/dev_a/hello", undefined, 25),
     (err: unknown) => err instanceof Error && err.message === "request_timeout",
   );
+});
+
+test("trimSupersededEvents retains pre-snapshot turn/completed and accepted response receipts so resolved approvals/questions never resurrect", () => {
+  const approval = {
+    approval_id: "apr-pre-snap",
+    hub_session_id: "hub-trim",
+    host_generation: "gen-1",
+    turn_id: "turn-1",
+    can_approve: true,
+    can_decline: true,
+  };
+  const question = {
+    question_id: "q-pre-snap",
+    hub_session_id: "hub-trim",
+    host_generation: "gen-1",
+    turn_id: "turn-1",
+    prompt: "Proceed?",
+  };
+  const unresolvedApproval = {
+    approval_id: "apr-still-open",
+    hub_session_id: "hub-trim",
+    host_generation: "gen-1",
+    turn_id: "turn-2",
+    can_approve: true,
+    can_decline: true,
+  };
+
+  const preEvents: RemoteEvent[] = [
+    {
+      cursor: 1,
+      runner_id: "runner",
+      payload: {
+        type: "event",
+        event: {
+          kind: "approval_requested",
+          hub_session_id: "hub-trim",
+          approval_id: approval.approval_id,
+          approval,
+        } as never,
+      },
+    },
+    {
+      cursor: 2,
+      runner_id: "runner",
+      payload: {
+        type: "receipt",
+        receipt: {
+          client_cmd_id: "cmd-apr-1",
+          hub_session_id: "hub-trim",
+          status: "accepted",
+          result: { response_sent: true, approval_id: approval.approval_id },
+        } as never,
+      },
+    },
+    {
+      cursor: 3,
+      runner_id: "runner",
+      payload: {
+        type: "event",
+        event: {
+          kind: "question_requested",
+          hub_session_id: "hub-trim",
+          question_id: question.question_id,
+          question,
+        } as never,
+      },
+    },
+    {
+      cursor: 4,
+      runner_id: "runner",
+      payload: {
+        type: "event",
+        event: {
+          kind: "turn/completed",
+          binding: { hub_session_id: "hub-trim" },
+          raw: { params: { turn: { id: "turn-1", status: "completed" } } },
+        } as never,
+      },
+    },
+    {
+      cursor: 5,
+      runner_id: "runner",
+      payload: {
+        type: "event",
+        event: {
+          kind: "approval_requested",
+          hub_session_id: "hub-trim",
+          approval_id: unresolvedApproval.approval_id,
+          approval: unresolvedApproval,
+        } as never,
+      },
+    },
+  ];
+  for (let i = 0; i < 70; i++) {
+    preEvents.push({
+      ...event("item/agentMessage/delta", { itemId: "m1", delta: "x" }),
+      cursor: 10 + i,
+    });
+  }
+  const snapshotEvt: RemoteEvent = {
+    ...event("history/snapshot", {
+      items: [{ id: "h1", kind: "message", role: "assistant", text: "done" }],
+    }),
+    cursor: 200,
+  };
+  const trimmed = trimSupersededEvents([...preEvents, snapshotEvt]);
+  assert.ok(trimmed.length < preEvents.length + 1);
+  assert.deepEqual(
+    pendingApprovals(trimmed, "hub-trim").map((a) => a.approval_id),
+    ["apr-still-open"],
+  );
+  assert.deepEqual(pendingQuestions(trimmed, "hub-trim"), []);
+});
+
+test("incremental conversationItems clones frozen fallback tool items without mutating prior render objects", () => {
+  const scope = "device/frozen-tool-fallback/";
+  const snapshotEvt: RemoteEvent = {
+    ...event("history/snapshot", {
+      items: [{ id: "h0", kind: "message", role: "user", text: "run check" }],
+    }),
+    cursor: 1,
+  };
+  const turnStart: RemoteEvent = {
+    ...event("turn/started", { turn: { id: "turn-freeze-1" } }),
+    cursor: 2,
+  };
+  const bareToolDelta: RemoteEvent = {
+    ...event("item/agentMessage/delta", {
+      itemId: "bare-1",
+      turnId: "turn-freeze-1",
+      delta: JSON.stringify({ command: "echo hi", description: "greet" }),
+    }),
+    cursor: 3,
+  };
+
+  const first = conversationItems(
+    [snapshotEvt, turnStart, bareToolDelta],
+    [],
+    scope,
+    "turn-freeze-1",
+  );
+  const frozenBefore = first.find((item) => item.kind === "tool");
+  assert.ok(frozenBefore);
+  assert.equal(frozenBefore.status, "running");
+  Object.freeze(frozenBefore);
+
+  // Match via runningToolsByTurn with a different item id; must copy instead of mutating frozenBefore.
+  const cmdStartByTurn: RemoteEvent = {
+    ...event("item/started", {
+      turnId: "turn-freeze-1",
+      item: {
+        id: "exec-turn-1",
+        type: "commandExecution",
+        command: "echo hi",
+        output: "starting...\n",
+        status: "inProgress",
+      },
+    }),
+    cursor: 4,
+  };
+  const second = conversationItems(
+    [snapshotEvt, turnStart, bareToolDelta, cmdStartByTurn],
+    [],
+    scope,
+    "turn-freeze-1",
+  );
+  const afterStart = second.find((item) => item.kind === "tool");
+  assert.ok(afterStart);
+  assert.notEqual(afterStart, frozenBefore);
+  assert.equal(frozenBefore.output, undefined);
+  assert.equal(afterStart.output, "starting...\n");
+  Object.freeze(afterStart);
+
+  // Now match via runningToolsByCmd (without turnId) on completion.
+  const cmdDoneByCmd: RemoteEvent = {
+    ...event("item/completed", {
+      item: {
+        id: "exec-cmd-2",
+        type: "commandExecution",
+        command: "echo hi",
+        aggregatedOutput: "hi\n",
+        status: "completed",
+      },
+    }),
+    cursor: 5,
+  };
+  const third = conversationItems(
+    [snapshotEvt, turnStart, bareToolDelta, cmdStartByTurn, cmdDoneByCmd],
+    [],
+    scope,
+    "turn-freeze-1",
+  );
+  const afterDone = third.find((item) => item.kind === "tool");
+  assert.ok(afterDone);
+  assert.notEqual(afterDone, afterStart);
+  assert.equal(frozenBefore.status, "running");
+  assert.equal(afterStart.status, "running");
+  assert.equal(afterDone.status, "completed");
+  assert.equal(afterDone.output, "hi\n");
 });

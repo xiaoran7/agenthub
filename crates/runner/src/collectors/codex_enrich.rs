@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{OnceLock, RwLock},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use rusqlite::{Connection, OpenFlags};
@@ -217,6 +217,7 @@ pub(crate) fn load_codex_enrichment_from_db(
     ) else {
         return HashMap::new();
     };
+    let _ = conn.busy_timeout(Duration::from_millis(500));
     let Ok(columns) = conn
         .prepare("PRAGMA table_info(threads)")
         .and_then(|mut s| {
@@ -275,14 +276,14 @@ pub(crate) fn load_codex_enrichment_from_db(
     let sql = format!(
         "SELECT id, {cwd_expr}, {created_ms}, {updated_ms}, {recency_ms}, {source_expr}, \
          {parent_expr}, {nick_expr}, {role_expr}, {model_expr}, {effort_expr}, {tokens_expr}, \
-         {rollout_expr}, {title_expr} FROM threads{archived_filter} LIMIT 5000"
+         {rollout_expr}, {title_expr} FROM threads{archived_filter} \
+         ORDER BY COALESCE({recency_ms}, {updated_ms}, {created_ms}, 0) DESC LIMIT 5000"
     );
     let Ok(mut stmt) = conn.prepare(&sql) else {
         return HashMap::new();
     };
 
-    let mut out = HashMap::new();
-    if let Ok(iter) = stmt.query_map([], |row| {
+    let Ok(iter) = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1).unwrap_or_default(),
@@ -299,122 +300,128 @@ pub(crate) fn load_codex_enrichment_from_db(
             row.get::<_, Option<String>>(12).unwrap_or_default(),
             row.get::<_, Option<String>>(13).unwrap_or_default(),
         ))
-    }) {
-        for r in iter.flatten() {
-            let (
-                id,
-                cwd_opt,
-                c_ms,
-                u_ms,
-                r_ms,
-                src_opt,
-                parent_opt,
-                nick_opt,
-                role_opt,
-                model_opt,
-                effort_opt,
-                tok_opt,
-                rollout_opt,
-                raw_title_opt,
-            ) = r;
-            let cwd = cwd_opt
-                .as_deref()
-                .map(strip_windows_verbatim)
-                .unwrap_or_default();
-            let last_ms = [r_ms, u_ms, c_ms]
-                .into_iter()
-                .flatten()
-                .map(normalize_codex_timestamp_ms)
-                .max()
-                .unwrap_or(0);
-            let db_tokens = tok_opt.unwrap_or(0).max(0) as u64;
-            let sub_meta = parse_codex_subagent_meta(
-                src_opt.as_deref().unwrap_or_default(),
-                parent_opt.as_deref(),
-                nick_opt.as_deref(),
-                role_opt.as_deref(),
-            );
+    }) else {
+        return HashMap::new();
+    };
 
-            let mut title = raw_title_opt
-                .as_deref()
-                .and_then(local_prompt_title)
-                .or_else(|| {
-                    raw_title_opt
-                        .as_deref()
-                        .and_then(|t| metadata_label(t, 160))
-                        .filter(|t| !t.contains("AGENTS.md instructions"))
-                });
-            let mut model = model_opt.and_then(|m| metadata_label(&m, 96));
-            let mut effort = effort_opt.and_then(|e| metadata_label(&e, 64));
-            let mut r_in = 0_u64;
-            let mut r_out = 0_u64;
-            let mut r_cr = 0_u64;
-            let mut r_total = 0_u64;
-            let mut ctx_used = 0_u64;
-            let mut ctx_win = 0_u64;
+    let mut out = HashMap::new();
+    for row_res in iter {
+        let Ok(r) = row_res else {
+            return HashMap::new();
+        };
+        let (
+            id,
+            cwd_opt,
+            c_ms,
+            u_ms,
+            r_ms,
+            src_opt,
+            parent_opt,
+            nick_opt,
+            role_opt,
+            model_opt,
+            effort_opt,
+            tok_opt,
+            rollout_opt,
+            raw_title_opt,
+        ) = r;
+        let cwd = cwd_opt
+            .as_deref()
+            .map(strip_windows_verbatim)
+            .unwrap_or_default();
+        let last_ms = [r_ms, u_ms, c_ms]
+            .into_iter()
+            .flatten()
+            .map(normalize_codex_timestamp_ms)
+            .max()
+            .unwrap_or(0);
+        let db_tokens = tok_opt.unwrap_or(0).max(0) as u64;
+        let sub_meta = parse_codex_subagent_meta(
+            src_opt.as_deref().unwrap_or_default(),
+            parent_opt.as_deref(),
+            nick_opt.as_deref(),
+            role_opt.as_deref(),
+        );
 
-            if let Some(ref rp) = rollout_opt {
-                let clean_rp = strip_windows_verbatim(rp);
-                if let Some(ctx) = apply_codex_rollout_context_cached(root, Path::new(&clean_rp)) {
-                    if title.is_none() {
-                        title = ctx.title;
-                    }
-                    if ctx.model.is_some() {
-                        model = ctx.model;
-                    }
-                    if ctx.reasoning_effort.is_some() {
-                        effort = ctx.reasoning_effort;
-                    }
-                    r_in = ctx.input_tokens.unwrap_or(0);
-                    r_out = ctx.output_tokens.unwrap_or(0);
-                    r_cr = ctx.cache_read_tokens.unwrap_or(0);
-                    r_total = ctx.session_total_tokens.unwrap_or(0);
-                    ctx_used = ctx.context_used_tokens.unwrap_or(0);
-                    ctx_win = ctx.context_window_tokens.unwrap_or(0);
+        let mut title = raw_title_opt
+            .as_deref()
+            .and_then(local_prompt_title)
+            .or_else(|| {
+                raw_title_opt
+                    .as_deref()
+                    .and_then(|t| metadata_label(t, 160))
+                    .filter(|t| !t.contains("AGENTS.md instructions"))
+            });
+        let mut model = model_opt.and_then(|m| metadata_label(&m, 96));
+        let mut effort = effort_opt.and_then(|e| metadata_label(&e, 64));
+        let mut r_in = 0_u64;
+        let mut r_out = 0_u64;
+        let mut r_cr = 0_u64;
+        let mut r_total = 0_u64;
+        let mut ctx_used = 0_u64;
+        let mut ctx_win = 0_u64;
+
+        if let Some(ref rp) = rollout_opt {
+            let clean_rp = strip_windows_verbatim(rp);
+            if let Some(ctx) = apply_codex_rollout_context_cached(root, Path::new(&clean_rp)) {
+                if title.is_none() {
+                    title = ctx.title;
                 }
+                if ctx.model.is_some() {
+                    model = ctx.model;
+                }
+                if ctx.reasoning_effort.is_some() {
+                    effort = ctx.reasoning_effort;
+                }
+                r_in = ctx.input_tokens.unwrap_or(0);
+                r_out = ctx.output_tokens.unwrap_or(0);
+                r_cr = ctx.cache_read_tokens.unwrap_or(0);
+                r_total = ctx.session_total_tokens.unwrap_or(0);
+                ctx_used = ctx.context_used_tokens.unwrap_or(0);
+                ctx_win = ctx.context_window_tokens.unwrap_or(0);
             }
-
-            let base_reqs = history_counts.get(&id).copied().unwrap_or(1).max(1);
-            let (tt, pt, ct, cr, reqs) =
-                if let Some(&(m_pt, m_ct, m_cr, m_reqs)) = magpie_codex.get(&id) {
-                    let tot = db_tokens.max(r_total).max(m_pt.saturating_add(m_ct));
-                    (tot, m_pt, m_ct, m_cr.max(r_cr), m_reqs.max(base_reqs))
-                } else if r_total > 0 || r_in > 0 || r_out > 0 {
-                    let tot = db_tokens.max(r_total).max(r_in.saturating_add(r_out));
-                    let prompt = if tot > r_in.saturating_add(r_out) {
-                        tot.saturating_sub(r_out)
-                    } else {
-                        r_in
-                    };
-                    (tot, prompt, r_out, r_cr, base_reqs)
-                } else if db_tokens > 0 {
-                    (db_tokens, db_tokens, 0, 0, base_reqs)
-                } else {
-                    (0, 0, 0, 0, base_reqs)
-                };
-
-            out.insert(
-                id.clone(),
-                CodexEnrichmentRow {
-                    id,
-                    cwd,
-                    title,
-                    model,
-                    reasoning_effort: effort,
-                    last_activity_at_ms: last_ms,
-                    prompt_tokens: pt,
-                    completion_tokens: ct,
-                    cache_read_tokens: cr,
-                    total_tokens: tt,
-                    context_used_tokens: ctx_used,
-                    context_window_tokens: ctx_win,
-                    request_count: reqs,
-                    parent_id: sub_meta.as_ref().map(|(p, _, _)| p.clone()),
-                    subagent_depth: sub_meta.as_ref().map(|(_, d, _)| *d).unwrap_or(0),
-                    subagent_kind: sub_meta.map(|(_, _, k)| k),
-                },
-            );
         }
+
+        let base_reqs = history_counts.get(&id).copied().unwrap_or(1).max(1);
+        let (tt, pt, ct, cr, reqs) =
+            if let Some(&(m_pt, m_ct, m_cr, m_reqs)) = magpie_codex.get(&id) {
+                let tot = db_tokens.max(r_total).max(m_pt.saturating_add(m_ct));
+                (tot, m_pt, m_ct, m_cr.max(r_cr), m_reqs.max(base_reqs))
+            } else if r_total > 0 || r_in > 0 || r_out > 0 {
+                let tot = db_tokens.max(r_total).max(r_in.saturating_add(r_out));
+                let prompt = if tot > r_in.saturating_add(r_out) {
+                    tot.saturating_sub(r_out)
+                } else {
+                    r_in
+                };
+                (tot, prompt, r_out, r_cr, base_reqs)
+            } else if db_tokens > 0 {
+                (db_tokens, db_tokens, 0, 0, base_reqs)
+            } else {
+                (0, 0, 0, 0, base_reqs)
+            };
+
+        out.insert(
+            id.clone(),
+            CodexEnrichmentRow {
+                id,
+                cwd,
+                title,
+                model,
+                reasoning_effort: effort,
+                last_activity_at_ms: last_ms,
+                prompt_tokens: pt,
+                completion_tokens: ct,
+                cache_read_tokens: cr,
+                total_tokens: tt,
+                context_used_tokens: ctx_used,
+                context_window_tokens: ctx_win,
+                request_count: reqs,
+                parent_id: sub_meta.as_ref().map(|(p, _, _)| p.clone()),
+                subagent_depth: sub_meta.as_ref().map(|(_, d, _)| *d).unwrap_or(0),
+                subagent_kind: sub_meta.map(|(_, _, k)| k),
+            },
+        );
     }
 
     if let Ok(mut guard) = enrichment_cache().write() {

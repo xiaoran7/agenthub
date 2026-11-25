@@ -1,0 +1,280 @@
+/* ================= Markdown 排版与代码块样式 ================= */
+/* One spacing scale for the whole document. The previous rules used 10/14/16/
+   20/22px for the same "space between blocks" job, which made paragraphs feel
+   arbitrary next to headings and lists. Everything below uses 8 / 12 / 20 /
+   28 from that scale. */
+.remote-md-content {
+  --md-space-1: 8px;
+  --md-space-2: 12px;
+  --md-space-3: 20px;
+  --md-space-4: 28px;
+  font-size: 14.5px;
+  line-height: 1.68;
+  color: #e2e8f0;
+  overflow-wrap: break-word;
+}
+.remote-md-content > *:first-child {
+  margin-top: 0;
+}
+.remote-md-content > *:last-child {
+  margin-bottom: 0;
+}
+/* react-markdown emits bare elements, so the block rhythm targets them
+   structurally rather than through a hand-rolled class. */
+.remote-md-content p {
+  margin: 0 0 var(--md-space-2);
+}
+.remote-md-content h1,
+.remote-md-content h2,
+.remote-md-content h3,
+.remote-md-content h4,
+.remote-md-content h5,
+.remote-md-content h6 {
+  /* More air above a heading than below it: it belongs to the block it
+     introduces, and the eye needs the break before it, not after. */
+  margin: var(--md-space-4) 0 var(--md-space-1);
+  font-weight: 650;
+  color: var(--remote-ink);
+  letter-spacing: -0.2px;
+  line-height: 1.35;
+}
+.remote-md-content h1 {
+  font-size: 18px;
+  border-bottom: 1px solid var(--remote-line);
+  padding-bottom: 4px;
+}
+.remote-md-content h2 {
+  font-size: 16.5px;
+  border-bottom: 1px solid var(--remote-line);
+  padding-bottom: 3px;
+}
+.remote-md-content h3 {
+  font-size: 15px;
+}
+.remote-md-content h4 {
+  font-size: 14px;
+}
+.remote-md-content h5,
+.remote-md-content h6 {
+  font-size: 13.5px;
+  color: var(--remote-secondary);
+}
+.remote-md-content ul,
+.remote-md-content ol {
+  margin: 0 0 var(--md-space-2);
+  padding-left: 22px;
+}
+.remote-md-content li {
+  margin-bottom: 5px;
+}
+.remote-md-content li > ul,
+.remote-md-content li > ol {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+.remote-md-content li::marker {
+  color: #64748b;
+}
+.remote-md-content ol > li::marker {
+  font-size: 0.9em;
+  font-weight: 600;
+}
+/* GFM task lists: the checkbox is the real control, so it is sized and
+   aligned rather than left to the browser default. */
+.remote-md-content input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0 8px 0 -20px;
+  vertical-align: -2px;
+  accent-color: var(--remote-blue, #93c5fd);
+  cursor: default;
+}
+.remote-md-content li:has(> input[type="checkbox"]) {
+  list-style: none;
+  position: relative;
+}
+.remote-md-content li:has(> input[type="checkbox"]) > input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: 4px;
+}
+.remote-md-content blockquote {
+  border-left: 3px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.06);
+  padding: 6px 14px;
+  margin: var(--md-space-2) 0;
+  border-radius: 0 6px 6px 0;
+  color: #94a3b8;
+}
+.remote-md-content blockquote p {
+  margin: 4px 0;
+}
+.remote-md-content hr {
+  border: 0;
+  height: 1px;
+  background: #282a30;
+  margin: var(--md-space-3) 0;
+}
+.remote-md-content strong {
+  font-weight: 650;
+  color: #f8fafc;
+}
+/* Italics need a real tonal step away from the body colour, or they are just
+   body text set at a slant. */
+.remote-md-content em {
+  font-style: italic;
+  color: #a5b0c2;
+}
+.remote-md-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #93c5fd;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+/* A code block is not an inline chip, so it drops the chip treatment. */
+.remote-md-content pre code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+.remote-md-content a {
+  color: #38bdf8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.remote-md-content a:hover {
+  color: #7dd3fc;
+}
+.remote-md-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+.remote-code-block {
+  background: #111216;
+  border: 1px solid #282b34;
+  border-radius: 9px;
+  margin: var(--md-space-2) 0;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.remote-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #181a20;
+  border-bottom: 1px solid #22252d;
+}
+.remote-code-lang {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.remote-code-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent !important;
+  border: 1px solid #333842 !important;
+  border-radius: 4px !important;
+  padding: 2px 7px !important;
+  font-size: 11px !important;
+  color: #94a3b8 !important;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.remote-code-copy-btn:hover {
+  background: #252832 !important;
+  color: #f1f5f9 !important;
+  border-color: #4b5262 !important;
+}
+.remote-code-copy-btn.copied {
+  color: var(--remote-green, #7ed5a0) !important;
+  border-color: rgba(126, 213, 160, 0.4) !important;
+  background: rgba(126, 213, 160, 0.1) !important;
+}
+.remote-code-pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #e2e8f0;
+  background: #0e0f13;
+}
+.remote-code-pre code {
+  font-family: inherit;
+}
+/* Tables overflow horizontally inside their own wrapper so a wide table never
+   widens the reading column. */
+.remote-md-table-wrapper {
+  overflow-x: auto;
+  margin: var(--md-space-2) 0;
+  border: 1px solid var(--remote-line);
+  border-radius: 8px;
+}
+.remote-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+.remote-md-table th {
+  background: var(--cds-surface-0, var(--remote-sidebar));
+  padding: 8px 12px;
+  font-weight: 600;
+  color: var(--remote-ink);
+  border-bottom: 1px solid var(--remote-line-strong);
+  white-space: nowrap;
+}
+.remote-md-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--remote-line);
+  color: var(--remote-secondary);
+}
+.remote-md-table tr:last-child td {
+  border-bottom: none;
+}
+.remote-md-table tr:hover td {
+  background: var(--remote-hover);
+}
+.remote-md-table tbody tr:nth-child(even) td {
+  background: rgba(17, 24, 39, 0.03);
+}
+[data-theme="dark"] .remote-md-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.03);
+}
+.remote-md-table tbody tr:nth-child(even):hover td {
+  background: var(--remote-hover);
+}
+.remote-md-ext-img-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--remote-line-strong);
+  background: var(--cds-surface-1, var(--remote-surface));
+  color: var(--remote-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.remote-md-ext-img-btn:hover {
+  border-color: var(--cds-clay, var(--remote-terracotta));
+  color: var(--remote-ink);
+}
+.remote-md-ext-img-btn:focus-visible {
+  outline: 2px solid var(--remote-terracotta);
+  outline-offset: 2px;
+}

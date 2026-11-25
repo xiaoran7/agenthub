@@ -1,7 +1,12 @@
 package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -31,192 +35,40 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.util.regex.Pattern
 import kotlinx.coroutines.delay
 
-enum class MessageRole {
-    USER,
-    ASSISTANT,
-    TOOL,
-    SYSTEM,
-}
-
-data class FormattedSegment(
-    val isCodeBlock: Boolean = false,
-    val language: String = "",
-    val text: String = "",
-    val unclosed: Boolean = false,
-)
-
-private val CLOSED_FENCE_PATTERN: Pattern =
-    Pattern.compile("```([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)```")
-private val UNCLOSED_FENCE_REGEX =
-    Regex("```([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*)$")
 private val TABLE_SEPARATOR_REGEX =
     Regex("^\\|?(?:\\s*:?-{3,}:?\\s*\\|)+\\s*:?-{3,}:?\\s*\\|?$")
-
-/**
- * Splits Markdown into closed code blocks, trailing streaming (unclosed) code
- * fences, and prose segments.
- */
-fun parseMarkdownSegments(content: String): List<FormattedSegment> {
-    if (!content.contains("```")) {
-        return if (content.isEmpty()) emptyList() else listOf(FormattedSegment(text = content))
-    }
-    val segments = mutableListOf<FormattedSegment>()
-    val matcher = CLOSED_FENCE_PATTERN.matcher(content)
-    var lastIndex = 0
-
-    while (matcher.find()) {
-        if (matcher.start() > lastIndex) {
-            val textPart = content.substring(lastIndex, matcher.start())
-            if (textPart.isNotEmpty()) {
-                segments.add(FormattedSegment(isCodeBlock = false, text = textPart))
-            }
-        }
-        val lang = matcher.group(1)?.trim() ?: ""
-        val code = matcher.group(2) ?: ""
-        segments.add(FormattedSegment(isCodeBlock = true, language = lang, text = code, unclosed = false))
-        lastIndex = matcher.end()
-    }
-
-    if (lastIndex < content.length) {
-        val remaining = content.substring(lastIndex)
-        if (remaining.isNotEmpty()) {
-            val openMatch = UNCLOSED_FENCE_REGEX.find(remaining)
-            if (openMatch != null) {
-                val before = remaining.substring(0, openMatch.range.first)
-                if (before.isNotEmpty()) {
-                    segments.add(FormattedSegment(isCodeBlock = false, text = before))
-                }
-                segments.add(
-                    FormattedSegment(
-                        isCodeBlock = true,
-                        language = openMatch.groupValues[1].trim(),
-                        text = openMatch.groupValues[2],
-                        unclosed = true,
-                    ),
-                )
-            } else {
-                segments.add(FormattedSegment(isCodeBlock = false, text = remaining))
-            }
-        }
-    }
-    return segments
-}
-
-class MarkdownSegmentCache {
-    private var source: String = ""
-    private var segments: List<FormattedSegment> = emptyList()
-
-    fun update(content: String): List<FormattedSegment> {
-        if (content == source) return segments
-        val appended =
-            if (source.isNotEmpty() && content.startsWith(source)) content.substring(source.length)
-            else null
-        val fenceMayBeSplit =
-            appended != null &&
-                (
-                    (source.endsWith("`") && !source.endsWith("```")) ||
-                        appended.startsWith("`")
-                    )
-        segments =
-            if (appended != null && !fenceMayBeSplit && !appended.contains("```")) {
-                val last = segments.lastOrNull()
-                when {
-                    last == null -> listOf(FormattedSegment(text = appended))
-                    last.isCodeBlock && !last.unclosed ->
-                        segments + FormattedSegment(text = appended)
-                    else ->
-                        segments.dropLast(1) + last.copy(text = last.text + appended)
-                }
-            } else {
-                parseMarkdownSegments(content)
-            }
-        source = content
-        return segments
-    }
-}
+private val HEADING_PREFIX_REGEX = Regex("^#{1,4}\\s+")
 
 @Composable
 fun buildInlineMarkdown(text: String): AnnotatedString {
     val codeBg = MaterialTheme.colorScheme.surfaceVariant
     val codeColor = OrcaColors.accentBlue
     val linkColor = OrcaColors.accentBlue
-
     return remember(text, codeBg, codeColor, linkColor) {
-        if (!text.contains("**") && !text.contains('`') && !text.contains('[')) {
-            return@remember AnnotatedString(text)
-        }
-        buildAnnotatedString {
-            var i = 0
-            while (i < text.length) {
-                if (text.startsWith("**", i)) {
-                    val end = text.indexOf("**", i + 2)
-                    if (end != -1) {
-                        pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                        append(text.substring(i + 2, end))
-                        pop()
-                        i = end + 2
-                        continue
-                    }
-                }
-                if (text.startsWith("`", i)) {
-                    val end = text.indexOf("`", i + 1)
-                    if (end != -1) {
-                        pushStyle(
-                            SpanStyle(
-                                fontFamily = FontFamily.Monospace,
-                                background = codeBg,
-                                color = codeColor,
-                                fontSize = 12.sp,
-                            ),
-                        )
-                        append(" ${text.substring(i + 1, end)} ")
-                        pop()
-                        i = end + 1
-                        continue
-                    }
-                }
-                if (text[i] == '[') {
-                    val closeBracket = text.indexOf("](", i + 1)
-                    if (closeBracket != -1) {
-                        val closeParen = text.indexOf(')', closeBracket + 2)
-                        if (closeParen != -1) {
-                            val label = text.substring(i + 1, closeBracket)
-                            pushStyle(
-                                SpanStyle(
-                                    color = linkColor,
-                                    textDecoration = TextDecoration.Underline,
-                                    fontWeight = FontWeight.Medium,
-                                ),
-                            )
-                            append(label)
-                            pop()
-                            i = closeParen + 1
-                            continue
-                        }
-                    }
-                }
-                append(text[i])
-                i++
-            }
-        }
+        parseInlineMarkdown(text, codeBg, codeColor, linkColor)
     }
 }
 
 /** Renders prose blocks including headings, blockquotes, lists, and horizontally scrollable tables. */
 @Composable
-fun MarkdownProseBlocks(text: String, modifier: Modifier = Modifier) {
+fun MarkdownProseBlocks(
+    text: String,
+    modifier: Modifier = Modifier,
+    proseStyle: TextStyle = MaterialTheme.typography.bodyMedium,
+) {
     val lines = remember(text) { text.lines() }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var idx = 0
@@ -243,10 +95,10 @@ fun MarkdownProseBlocks(text: String, modifier: Modifier = Modifier) {
                 MarkdownTableSurface(headers = headers, rows = rows)
                 continue
             }
-            if (trimmed.startsWith("### ")) {
+            if (trimmed.startsWith("#### ") || trimmed.startsWith("### ")) {
                 Text(
-                    text = buildInlineMarkdown(trimmed.removePrefix("### ").trim()),
-                    style = MaterialTheme.typography.titleSmall,
+                    text = buildInlineMarkdown(trimmed.replaceFirst(HEADING_PREFIX_REGEX, "").trim()),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 4.dp),
                 )
@@ -254,10 +106,10 @@ fun MarkdownProseBlocks(text: String, modifier: Modifier = Modifier) {
                 continue
             }
             if (trimmed.startsWith("## ") || trimmed.startsWith("# ")) {
-                val heading = trimmed.replaceFirst(Regex("^#{1,2}\\s+"), "")
+                val heading = trimmed.replaceFirst(HEADING_PREFIX_REGEX, "")
                 Text(
                     text = buildInlineMarkdown(heading),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 6.dp),
                 )
@@ -277,7 +129,7 @@ fun MarkdownProseBlocks(text: String, modifier: Modifier = Modifier) {
                     )
                     Text(
                         text = buildInlineMarkdown(trimmed.removePrefix("> ").trim()),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = proseStyle,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
@@ -308,58 +160,127 @@ fun MarkdownProseBlocks(text: String, modifier: Modifier = Modifier) {
             }
             Text(
                 text = buildInlineMarkdown(buf.toString()),
-                style = MaterialTheme.typography.bodyMedium,
+                style = proseStyle,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
     }
 }
 
-private fun splitTableCells(row: String): List<String> =
-    row.trim().removePrefix("|").removeSuffix("|").split('|').map { it.trim() }
-
 @Composable
 private fun MarkdownTableSurface(
     headers: List<String>,
     rows: List<List<String>>,
 ) {
+    val colCount = maxOf(headers.size, rows.maxOfOrNull { it.size } ?: 0)
+    if (colCount == 0) return
     val scroll = rememberScrollState()
+    val colors = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val minColPx = with(density) { 68.dp.roundToPx() }
+    val maxColPx = with(density) { 232.dp.roundToPx() }
+    val dividerPx = with(density) { 1.dp.roundToPx().coerceAtLeast(1) }
+    val allRows =
+        remember(headers, rows, colCount) {
+            listOf(headers) + rows
+        }
+
     Surface(
         modifier = Modifier.fillMaxWidth().padding(vertical = OrcaSpace.xs),
         shape = RoundedCornerShape(OrcaRadius.button),
         color = OrcaColors.bgInset,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(1.dp, colors.outline),
     ) {
-        Column(modifier = Modifier.horizontalScroll(scroll)) {
-            Row(
-                modifier =
-                    Modifier
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(horizontal = OrcaSpace.sm, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.md),
-            ) {
-                headers.forEach { cell ->
-                    Text(
-                        text = cell,
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.widthIn(min = 84.dp, max = 220.dp),
-                    )
+        Box(modifier = Modifier.fillMaxWidth().horizontalScroll(scroll)) {
+            Layout(
+                content = {
+                    allRows.forEachIndexed { rowIdx, _ ->
+                        val bg =
+                            when {
+                                rowIdx == 0 -> colors.surfaceVariant
+                                rowIdx % 2 == 0 -> colors.surfaceVariant.copy(alpha = 0.28f)
+                                else -> Color.Transparent
+                            }
+                        Box(Modifier.background(bg))
+                    }
+                    for (r in 1 until allRows.size) {
+                        Box(Modifier.background(colors.outline.copy(alpha = 0.7f)))
+                    }
+                    allRows.forEachIndexed { rowIdx, row ->
+                        val isHeader = rowIdx == 0
+                        for (colIdx in 0 until colCount) {
+                            val rawCell = row.getOrNull(colIdx).orEmpty()
+                            Box(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = if (isHeader) 9.dp else 8.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                Text(
+                                    text = buildInlineMarkdown(rawCell),
+                                    style =
+                                        if (isHeader) {
+                                            MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        } else {
+                                            MaterialTheme.typography.bodySmall.copy(lineHeight = 19.sp)
+                                        },
+                                    color = colors.onSurface,
+                                )
+                            }
+                        }
+                    }
+                },
+            ) { measurables, constraints ->
+                val rowCount = allRows.size
+                val dividerCount = (rowCount - 1).coerceAtLeast(0)
+                val bgMeasurables = measurables.subList(0, rowCount)
+                val dividerMeasurables = measurables.subList(rowCount, rowCount + dividerCount)
+                val cellMeasurables = measurables.subList(rowCount + dividerCount, measurables.size)
+
+                val colWidths = IntArray(colCount) { minColPx }
+                val firstPass =
+                    cellMeasurables.mapIndexed { idx, m ->
+                        val col = idx % colCount
+                        val p = m.measure(Constraints(minWidth = 0, maxWidth = maxColPx))
+                        if (p.width > colWidths[col]) colWidths[col] = p.width
+                        p
+                    }
+                val totalWidth = maxOf(colWidths.sum(), constraints.minWidth)
+                val extra = totalWidth - colWidths.sum()
+                if (extra > 0 && colCount > 0) {
+                    colWidths[colCount - 1] += extra
                 }
-            }
-            rows.forEach { row ->
-                Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
-                Row(
-                    modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.md),
-                ) {
-                    headers.indices.forEach { colIdx ->
-                        Text(
-                            text = row.getOrNull(colIdx).orEmpty(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.widthIn(min = 84.dp, max = 220.dp),
-                        )
+
+                val rowHeights = IntArray(rowCount)
+                firstPass.forEachIndexed { idx, p ->
+                    val r = idx / colCount
+                    if (p.height > rowHeights[r]) rowHeights[r] = p.height
+                }
+
+                val bgPlaceables =
+                    bgMeasurables.mapIndexed { r, m ->
+                        m.measure(Constraints.fixed(totalWidth, rowHeights[r]))
+                    }
+                val dividerPlaceables =
+                    dividerMeasurables.map { m ->
+                        m.measure(Constraints.fixed(totalWidth, dividerPx))
+                    }
+                val totalHeight = rowHeights.sum() + dividerCount * dividerPx
+
+                layout(totalWidth, totalHeight) {
+                    var y = 0
+                    for (r in 0 until rowCount) {
+                        if (r > 0) {
+                            dividerPlaceables[r - 1].placeRelative(0, y)
+                            y += dividerPx
+                        }
+                        bgPlaceables[r].placeRelative(0, y)
+                        var x = 0
+                        for (c in 0 until colCount) {
+                            val cell = firstPass[r * colCount + c]
+                            val cy = y + ((rowHeights[r] - cell.height) / 2).coerceAtLeast(0)
+                            cell.placeRelative(x, cy)
+                            x += colWidths[c]
+                        }
+                        y += rowHeights[r]
                     }
                 }
             }
@@ -444,13 +365,18 @@ fun CodeBlockSurface(
 @Composable
 fun ThinkingAccordion(
     thought: String,
-    isGenerating: Boolean = false,
     modifier: Modifier = Modifier,
+    isGenerating: Boolean = false,
 ) {
     val clipboard = LocalClipboardManager.current
     var userToggled by remember { mutableStateOf<Boolean?>(null) }
     var copied by remember { mutableStateOf(false) }
     val expanded = userToggled ?: isGenerating
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(MotionTokens.Quick),
+        label = "thinking-chevron",
+    )
 
     LaunchedEffect(copied) {
         if (copied) {
@@ -460,11 +386,7 @@ fun ThinkingAccordion(
     }
 
     Surface(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .animateContentSize()
-                .padding(vertical = OrcaSpace.xxs),
+        modifier = modifier.fillMaxWidth().padding(vertical = OrcaSpace.xxs),
         shape = RoundedCornerShape(OrcaRadius.button),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -516,14 +438,28 @@ fun ThinkingAccordion(
                                     .padding(horizontal = 6.dp, vertical = 4.dp),
                         )
                     }
-                    OrcaChevronDown(
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        size = 12.dp,
-                        expanded = expanded,
-                    )
+                    Box(Modifier.graphicsLayer { rotationZ = chevronRotation }) {
+                        OrcaChevronDown(
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            size = 12.dp,
+                            expanded = false,
+                        )
+                    }
                 }
             }
-            AnimatedVisibility(visible = expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter =
+                    expandVertically(
+                        animationSpec = tween(MotionTokens.Standard),
+                        expandFrom = Alignment.Top,
+                    ) + fadeIn(tween(MotionTokens.Standard)),
+                exit =
+                    shrinkVertically(
+                        animationSpec = tween(MotionTokens.Quick),
+                        shrinkTowards = Alignment.Top,
+                    ) + fadeOut(tween(MotionTokens.Quick)),
+            ) {
                 Text(
                     text = thought.trim(),
                     style = OrcaType.code.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),

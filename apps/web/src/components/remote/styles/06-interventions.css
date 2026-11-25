@@ -1,0 +1,483 @@
+/* The pill that says the Host is still waiting for a decision. */
+.remote-approval-awaiting-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--cds-clay, #d97757);
+  background: var(--cds-clay-light, rgba(217, 119, 87, 0.1));
+  border: 1px solid rgba(217, 119, 87, 0.3);
+  padding: 2px 9px;
+  border-radius: var(--df-radius-pill, 999px);
+  white-space: nowrap;
+}
+/* A pulse that shows the decision is still outstanding. */
+.awaiting-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cds-clay, #d97757);
+  flex-shrink: 0;
+  animation: awaiting-pulse 1.6s ease-in-out infinite;
+}
+.awaiting-dot.question {
+  background: var(--cds-blue, #3b82f6);
+}
+@keyframes awaiting-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.remote-approval-badge {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: var(--df-radius-pill, 999px);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.remote-approval-badge.high {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+[data-theme="dark"] .remote-approval-badge.high,
+:root[data-theme="dark"] .remote-approval-badge.high {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.18);
+}
+.remote-approval-badge.medium {
+  background: rgba(217, 119, 6, 0.12);
+  color: #d97706;
+  border: 1px solid rgba(217, 119, 6, 0.3);
+}
+[data-theme="dark"] .remote-approval-badge.medium,
+:root[data-theme="dark"] .remote-approval-badge.medium {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.18);
+}
+.remote-approval-badge.low {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+}
+[data-theme="dark"] .remote-approval-badge.low,
+:root[data-theme="dark"] .remote-approval-badge.low {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.18);
+}
+.remote-approval-desc {
+  font-size: 13.5px;
+  color: var(--cds-text-secondary, #374151);
+  margin-bottom: 14px;
+  line-height: 1.55;
+}
+.remote-approval-box-wrapper {
+  margin: 12px 0 16px;
+}
+.remote-approval-box-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.remote-approval-box-label {
+  font-size: 12px;
+  color: var(--cds-text-muted, #64666d);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.remote-approval-command-box {
+  background: var(--cds-surface-0, #0d0e12);
+  border: 1px solid var(--cds-border, #1e222a);
+  border-radius: var(--radius-lg, 10px);
+  padding: 12px 14px;
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: #16a34a;
+  word-break: break-all;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+[data-theme="dark"] .remote-approval-command-box,
+:root[data-theme="dark"] .remote-approval-command-box {
+  color: #86efac;
+}
+.remote-approval-diff-section {
+  margin: 12px 0 16px;
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-lg, 10px);
+  background: var(--cds-surface-0, rgba(0, 0, 0, 0.02));
+  overflow: hidden;
+}
+.remote-approval-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--cds-surface-1, rgba(255, 255, 255, 0.7));
+  border-bottom: 1px solid var(--cds-border, rgba(0, 0, 0, 0.08));
+}
+[data-theme="dark"] .remote-approval-diff-header {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+.remote-approval-diff-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-approval-diff-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm, 5px);
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.04));
+}
+[data-theme="dark"] .remote-approval-diff-badge {
+  background: rgba(255, 255, 255, 0.06);
+}
+.remote-diff-stat-add {
+  color: #16a34a;
+}
+[data-theme="dark"] .remote-diff-stat-add {
+  color: #4ade80;
+}
+.remote-diff-stat-del {
+  color: #ef4444;
+}
+[data-theme="dark"] .remote-diff-stat-del {
+  color: #f87171;
+}
+.remote-approval-diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-approval-diff-toggle-btn {
+  background: var(--cds-surface-2, transparent);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.12));
+  color: var(--cds-text-secondary, #374151);
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: var(--radius-md, 6px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.remote-approval-diff-toggle-btn:hover {
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.05));
+  color: var(--cds-text-primary, #111827);
+  border-color: var(--cds-border-strong, rgba(0, 0, 0, 0.2));
+  transform: translateY(-0.5px);
+}
+.remote-approval-diff-toggle-btn:active {
+  transform: scale(0.97);
+}
+[data-theme="dark"] .remote-approval-diff-toggle-btn {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #d1d5db;
+}
+[data-theme="dark"] .remote-approval-diff-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f9fafb;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.remote-diff-chevron {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+}
+.remote-diff-chevron.open {
+  transform: rotate(180deg);
+}
+.remote-approval-diff-body {
+  padding: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.remote-approval-diff-body .remote-diff-viewer {
+  margin: 0;
+}
+.remote-approval-raw-diff {
+  background: var(--cds-surface-0, #0d0e12);
+  border: 1px solid var(--cds-border, #1e222a);
+  border-radius: var(--radius-lg, 10px);
+  color: var(--cds-text-primary, #f1f5f9);
+}
+/* Only the button row is a right-aligned flex row. The other direct children
+   of the card are blocks: a blanket `> div` rule turned the header, the
+   description and the code boxes into rows as well. */
+.remote-approval-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+.remote-approval-btn-decline {
+  padding: 8px 18px;
+  min-height: 38px;
+  font-size: 13.5px;
+  font-weight: 550;
+  border-radius: var(--radius-lg, 10px);
+  border: 1px solid var(--cds-border-strong, rgba(0, 0, 0, 0.2));
+  background: var(--cds-surface-2, transparent);
+  color: var(--cds-text-secondary, #374151);
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.remote-approval-btn-decline:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.35);
+  transform: translateY(-1px);
+}
+.remote-approval-btn-decline:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.remote-approval-btn-approve {
+  padding: 8px 20px;
+  min-height: 38px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: var(--radius-lg, 10px);
+  border: 1px solid transparent;
+  background: var(--cds-clay, #d97757);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(217, 119, 87, 0.3);
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.remote-approval-btn-approve:hover:not(:disabled) {
+  background: var(--cds-clay-hover, #cc5a36);
+  box-shadow: 0 4px 12px rgba(217, 119, 87, 0.4);
+  transform: translateY(-1.5px);
+}
+.remote-approval-btn-approve:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+.remote-question {
+  border: 1px solid var(--cds-border-strong, rgba(59, 130, 246, 0.4));
+  background: var(--cds-surface-2, #ffffff);
+  padding: 18px 20px;
+  border-radius: var(--radius-2xl, 16px);
+  margin: 0 auto 20px;
+  max-width: var(--remote-measure);
+  width: 100%;
+  box-shadow: var(--cds-shadow-md);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: card-fade-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+[data-theme="dark"] .remote-question,
+:root[data-theme="dark"] .remote-question {
+  background: var(--cds-surface-2, #1a1a19);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+.remote-question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  font-weight: 650;
+  margin-bottom: 10px;
+  color: var(--cds-text-primary, #111827);
+}
+.remote-question-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  flex-shrink: 0;
+}
+[data-theme="dark"] .remote-question-glyph,
+:root[data-theme="dark"] .remote-question-glyph {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.2);
+}
+.remote-question-type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--df-radius-pill, 999px);
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+[data-theme="dark"] .remote-question-type-badge,
+:root[data-theme="dark"] .remote-question-type-badge {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.18);
+}
+.remote-question-prompt {
+  font-size: 14px;
+  color: var(--cds-text-secondary, #374151);
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+.remote-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.remote-option-btn {
+  background: var(--cds-surface-0, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.12));
+  color: var(--cds-text-primary, #111827);
+  padding: 10px 14px;
+  border-radius: var(--radius-lg, 10px);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  max-width: 100%;
+}
+.remote-option-btn:hover:not(:disabled) {
+  background: var(--cds-alpha-1, rgba(59, 130, 246, 0.08));
+  border-color: rgba(59, 130, 246, 0.5);
+  transform: translateY(-1px);
+}
+.remote-option-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.remote-option-btn.selected {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1.5px #2563eb;
+}
+[data-theme="dark"] .remote-option-btn.selected,
+:root[data-theme="dark"] .remote-option-btn.selected {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 1.5px #60a5fa;
+}
+.remote-option-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-option-check {
+  font-size: 11px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs, 4px);
+  border: 1px solid var(--cds-border-strong, rgba(0, 0, 0, 0.25));
+  color: transparent;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.remote-option-check.checked {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+[data-theme="dark"] .remote-option-check.checked,
+:root[data-theme="dark"] .remote-option-check.checked {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+.remote-option-desc {
+  font-size: 12px;
+  color: var(--cds-text-muted, #64666d);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+.remote-option-preview {
+  margin: 8px 0 2px;
+  padding: 8px 12px;
+  background: var(--cds-surface-0, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.1));
+  border-radius: var(--radius-md, 8px);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--cds-text-secondary, #374151);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 140px;
+  overflow-y: auto;
+  width: 100%;
+}
+.remote-question-multi-actions {
+  margin: 10px 0 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+.remote-question-submit-btn {
+  padding: 8px 18px;
+  min-height: 38px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: var(--radius-lg, 10px);
+  background: #2563eb;
+  color: #ffffff;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.remote-question-submit-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+.remote-question-submit-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.remote-question-input-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+.remote-question-input {
+  flex: 1;
+  background: var(--cds-surface-0, #f5f5f3);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.12));
+  color: var(--cds-text-primary, #111827);
+  border-radius: var(--radius-lg, 10px);
+  padding: 10px 14px;
+  min-height: 42px;
+  font-size: 13.5px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+.remote-question-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}

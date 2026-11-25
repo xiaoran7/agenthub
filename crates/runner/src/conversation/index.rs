@@ -13,18 +13,18 @@ pub(crate) struct CachedConversationEntry {
 }
 
 pub(crate) fn conversation_cache() -> &'static RwLock<
-    crate::collectors::BoundedLruCache<(PathBuf, AgentType, String), CachedConversationEntry>,
+    crate::lru_cache::BoundedLruCache<(PathBuf, AgentType, String), CachedConversationEntry>,
 > {
     static CACHE: OnceLock<
         RwLock<
-            crate::collectors::BoundedLruCache<
+            crate::lru_cache::BoundedLruCache<
                 (PathBuf, AgentType, String),
                 CachedConversationEntry,
             >,
         >,
     > = OnceLock::new();
     CACHE.get_or_init(|| {
-        RwLock::new(crate::collectors::BoundedLruCache::with_ttl(
+        RwLock::new(crate::lru_cache::BoundedLruCache::with_ttl(
             256,
             Duration::from_secs(10),
         ))

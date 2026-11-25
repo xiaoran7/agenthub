@@ -26,6 +26,8 @@ pub(crate) struct LedgerCache {
     pub(crate) magpie_gateway: HashMap<PathBuf, (FileMark, Vec<LedgerRecord>)>,
     /// Non-retaining handle to the last full-ledger merge while active callers borrow it.
     pub(crate) records_weak: std::sync::Weak<Vec<LedgerRecord>>,
+    /// Memoised 53-week heatmap keyed by `local_day` for the current generation.
+    pub(crate) heat_cache: Option<(String, Vec<DayPoint>)>,
     /// Memoised digests keyed by `(period, limit, local_day)` for the current generation.
     pub(crate) digests: HashMap<(&'static str, usize, String), Arc<LedgerDigest>>,
 }
@@ -42,7 +44,11 @@ impl LedgerCache {
         }
     }
 
-    pub(crate) fn remove_missing_cold_paths(&mut self, source: &str, live: &HashSet<&Path>) {
+    pub(crate) fn remove_missing_cold_paths(
+        &mut self,
+        source: &str,
+        live: &HashSet<&Path>,
+    ) -> bool {
         let missing: Vec<PathBuf> = self
             .cold_manifest
             .iter()
@@ -55,7 +61,9 @@ impl LedgerCache {
                 self.dirty_db_removals.insert(p);
             }
             self.recompute_cold_max_t();
+            return true;
         }
+        false
     }
 }
 
@@ -231,12 +239,12 @@ pub(crate) fn walk_stores_if_needed(force: bool) -> bool {
     let other_changed = update_other_agent_calls(&routed);
     let any_changed = claude_changed || other_changed;
 
-    let first_walk = ledger_cache()
+    let (first_walk, has_dirty_removals) = ledger_cache()
         .read()
-        .map(|g| g.walked_at.is_none())
-        .unwrap_or(true);
+        .map(|g| (g.walked_at.is_none(), !g.dirty_db_removals.is_empty()))
+        .unwrap_or((true, false));
 
-    if !any_changed && !first_walk {
+    if !any_changed && !first_walk && !has_dirty_removals {
         if let Ok(mut guard) = ledger_cache().write() {
             guard.walked_at = Some(Instant::now());
         }
@@ -249,6 +257,7 @@ pub(crate) fn walk_stores_if_needed(force: bool) -> bool {
         guard.walked_at = Some(Instant::now());
         if any_changed {
             guard.generation = guard.generation.wrapping_add(1).max(1);
+            guard.heat_cache = None;
             guard.digests.clear();
             guard.records_weak = std::sync::Weak::new();
         } else {
@@ -264,7 +273,8 @@ pub(crate) fn walk_stores_if_needed(force: bool) -> bool {
 /// Assembles, deduplicates, and retry-marks records with `t >= min_since_ms`.
 /// Hot-window queries skip cloning cold history and avoid touching `usage_index.db`
 /// unless cold archived files overlap `[min_since_ms, now]`.
-fn collect_windowed_records(min_since_ms: i64) -> Vec<LedgerRecord> {
+/// Returns `(records, cold_ok)` where `cold_ok` is `false` if a needed cold DB read failed.
+pub(crate) fn collect_windowed_records(min_since_ms: i64) -> (Vec<LedgerRecord>, bool) {
     let mut records = Vec::new();
     let mut gateway_candidates = Vec::new();
     let mut need_cold_db = false;
@@ -274,6 +284,11 @@ fn collect_windowed_records(min_since_ms: i64) -> Vec<LedgerRecord> {
         need_cold_db = !guard.cold_manifest.is_empty()
             && (min_since_ms == i64::MIN
                 || guard.cold_max_t.is_some_and(|max_t| min_since_ms <= max_t));
+
+        if need_cold_db {
+            // Never resurrect invalidated/deleted sessions whose SQLite removal is still pending.
+            hot_paths.extend(guard.dirty_db_removals.iter().cloned());
+        }
 
         for (path, state) in &guard.files {
             if state.cold_archived {
@@ -285,7 +300,7 @@ fn collect_windowed_records(min_since_ms: i64) -> Vec<LedgerRecord> {
             records.extend(state.calls.iter().filter(|r| r.t >= min_since_ms).cloned());
         }
         for (path, (_, recs)) in &guard.codex {
-            if recs.is_empty() {
+            if recs.is_empty() && guard.cold_manifest.contains_key(path) {
                 continue;
             }
             if need_cold_db {
@@ -294,7 +309,7 @@ fn collect_windowed_records(min_since_ms: i64) -> Vec<LedgerRecord> {
             records.extend(recs.iter().filter(|r| r.t >= min_since_ms).cloned());
         }
         for (path, (_, recs)) in &guard.other_files {
-            if recs.is_empty() {
+            if recs.is_empty() && guard.cold_manifest.contains_key(path) {
                 continue;
             }
             if need_cold_db {
@@ -307,28 +322,47 @@ fn collect_windowed_records(min_since_ms: i64) -> Vec<LedgerRecord> {
         }
     }
 
-    if need_cold_db
-        && let Some(db_path) = active_index_db_path()
-        && db_path.is_file()
-        && let Ok(db) = UsageIndexDb::open(&db_path)
-        && let Ok(cold) = db.query_records_since(min_since_ms, &hot_paths)
-    {
-        records.extend(cold);
+    let mut cold_ok = true;
+    if need_cold_db {
+        if let Some(db_path) = active_index_db_path()
+            && db_path.is_file()
+        {
+            match UsageIndexDb::open_read_only(&db_path)
+                .and_then(|db| db.query_records_since(min_since_ms, &hot_paths))
+            {
+                Ok(cold) => records.extend(cold),
+                Err(_) => cold_ok = false,
+            }
+        } else {
+            cold_ok = false;
+        }
     }
 
     // Fold in Magpie gateway records (`usage.jsonl`) that were not already
     // captured in a local session file (port of Magpie's `gatewayMatches`).
     if !gateway_candidates.is_empty() {
+        let mut local_index: HashMap<(&'static str, u64, u64, u64), Vec<(Arc<str>, i64)>> =
+            HashMap::with_capacity(records.len());
+        for local in &records {
+            local_index
+                .entry((local.agent, local.input, local.output, local.cache_read))
+                .or_default()
+                .push((Arc::clone(&local.session), local.t));
+        }
         for gw in gateway_candidates {
-            let matched = records.iter().any(|local| {
-                local.agent == gw.agent
-                    && (!gw.session.is_empty() && local.session == gw.session
-                        || (local.t - gw.t).abs() <= 5_000)
-                    && local.input == gw.input
-                    && local.output == gw.output
-                    && local.cache_read == gw.cache_read
-            });
+            let matched = local_index
+                .get(&(gw.agent, gw.input, gw.output, gw.cache_read))
+                .is_some_and(|entries| {
+                    entries.iter().any(|(sess, t)| {
+                        (!gw.session.is_empty() && sess.as_ref() == gw.session.as_ref())
+                            || (t - gw.t).abs() <= 5_000
+                    })
+                });
             if !matched {
+                local_index
+                    .entry((gw.agent, gw.input, gw.output, gw.cache_read))
+                    .or_default()
+                    .push((Arc::clone(&gw.session), gw.t));
                 records.push(gw);
             }
         }
@@ -337,7 +371,7 @@ fn collect_windowed_records(min_since_ms: i64) -> Vec<LedgerRecord> {
     records.sort_by_key(|r| std::cmp::Reverse(r.t));
     dedupe(&mut records);
     mark_retries(&mut records);
-    records
+    (records, cold_ok)
 }
 
 /// Every call in the local stores, newest first.
@@ -350,24 +384,30 @@ pub fn claude_records() -> Vec<LedgerRecord> {
 }
 
 pub(crate) fn claude_records_arc_inner(force: bool) -> Arc<Vec<LedgerRecord>> {
+    claude_records_arc_with_status(force).0
+}
+
+fn claude_records_arc_with_status(force: bool) -> (Arc<Vec<LedgerRecord>>, bool) {
     walk_stores_if_needed(force);
     let gen_before = if let Ok(guard) = ledger_cache().read() {
         if let Some(hit) = guard.records_weak.upgrade() {
-            return hit;
+            return (hit, true);
         }
         guard.generation
     } else {
         0
     };
 
-    let merged = Arc::new(collect_windowed_records(i64::MIN));
-    if let Ok(mut guard) = ledger_cache().write()
+    let (records, cold_ok) = collect_windowed_records(i64::MIN);
+    let merged = Arc::new(records);
+    if cold_ok
+        && let Ok(mut guard) = ledger_cache().write()
         && guard.generation == gen_before
     {
         guard.records_weak = Arc::downgrade(&merged);
     }
     prune_interner();
-    merged
+    (merged, cold_ok)
 }
 
 /// Releases free allocator heap pages back to the OS (explicitly avoids Windows
@@ -424,37 +464,70 @@ pub fn digest_cached_with_force(
     walk_stores_if_needed(force);
     let now_ms = chrono::Local::now().timestamp_millis();
     let today = local_day(now_ms);
-    let key = (period.key(), recent_limit, today);
+    let key = (period.key(), recent_limit, today.clone());
 
-    let (gen_before, cached_all) = if let Ok(guard) = ledger_cache().read() {
+    let (gen_before, cached_all, cached_heat) = if let Ok(guard) = ledger_cache().read() {
         if let Some(hit) = guard.digests.get(&key) {
             return (guard.generation.max(1), Arc::clone(hit));
         }
-        (guard.generation, guard.records_weak.upgrade())
+        let heat = guard
+            .heat_cache
+            .as_ref()
+            .filter(|(d, _)| d == &today)
+            .map(|(_, h)| h.clone());
+        (guard.generation, guard.records_weak.upgrade(), heat)
     } else {
-        (0, None)
+        (0, None, None)
     };
 
-    let built = if let Some(all_records) = cached_all {
-        Arc::new(digest(&all_records, period, recent_limit))
+    let (built, heat_to_store, cacheable) = if let Some(all_records) = cached_all {
+        let need_heat = cached_heat.is_none();
+        let d = digest::digest_with_heat(&all_records, period, recent_limit, cached_heat);
+        let heat = need_heat.then(|| d.heat.clone());
+        (Arc::new(d), heat, true)
     } else if matches!(period, Period::All) {
-        let all_records = claude_records_arc_inner(false);
-        Arc::new(digest(&all_records, period, recent_limit))
-    } else {
+        let (all_records, cold_ok) = claude_records_arc_with_status(false);
+        let need_heat = cached_heat.is_none();
+        let d = digest::digest_with_heat(&all_records, period, recent_limit, cached_heat);
+        let heat = need_heat.then(|| d.heat.clone());
+        (Arc::new(d), heat, cold_ok)
+    } else if let Some(heat) = cached_heat {
         let window_since = period
             .since_ms(now_ms)
             .saturating_sub(RETRY_WINDOW_MS + 60_000);
-        let windowed = collect_windowed_records(window_since);
-        let d = Arc::new(digest(&windowed, period, recent_limit));
+        let (windowed, cold_ok) = collect_windowed_records(window_since);
+        let d = Arc::new(digest::digest_with_heat(
+            &windowed,
+            period,
+            recent_limit,
+            Some(heat),
+        ));
         drop(windowed);
         prune_interner();
-        d
+        (d, None, cold_ok)
+    } else {
+        // Populate the 53-week heatmap alongside the requested period window so
+        // switching between Today / 7d / 30d / All keeps the full calendar intact.
+        let heat_since = digest::heat_window_start(now_ms).saturating_sub(86_400_000);
+        let window_since = period
+            .since_ms(now_ms)
+            .min(heat_since)
+            .saturating_sub(RETRY_WINDOW_MS + 60_000);
+        let (windowed, cold_ok) = collect_windowed_records(window_since);
+        let d = digest::digest_with_heat(&windowed, period, recent_limit, None);
+        let heat = d.heat.clone();
+        drop(windowed);
+        prune_interner();
+        (Arc::new(d), Some(heat), cold_ok)
     };
 
     let mut generation = gen_before.max(1);
     if let Ok(mut guard) = ledger_cache().write() {
         generation = guard.generation.max(1);
-        if guard.generation == gen_before {
+        if cacheable && guard.generation == gen_before {
+            if let Some(heat) = heat_to_store {
+                guard.heat_cache = Some((today, heat));
+            }
             if guard.digests.len() > 16 {
                 guard.digests.clear();
             }
@@ -469,11 +542,16 @@ pub fn digest_cached_with_force(
 /// Claude Desktop's `local-agent-mode-sessions` directories.
 pub(crate) fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
     let roots = claude_transcript_roots();
-    if roots.is_empty() {
-        return false;
-    }
-    let file_marks = transcript_files_from_roots(&roots);
-    if file_marks.is_empty() {
+    let file_marks = if roots.is_empty() {
+        Vec::new()
+    } else {
+        transcript_files_from_roots(&roots)
+    };
+    if file_marks.is_empty()
+        && ledger_cache().read().is_ok_and(|g| {
+            g.files.is_empty() && !g.cold_manifest.values().any(|m| m.source == "claude")
+        })
+    {
         return false;
     }
 
@@ -481,11 +559,14 @@ pub(crate) fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
     if let Ok(guard) = ledger_cache().read()
         && guard.walked_at.is_some()
         && guard.files.len() == file_marks.len()
-        && file_marks.iter().all(|(p, _, len, mtime)| {
-            guard
-                .files
-                .get(p)
-                .is_some_and(|old| old.offset == *len && old.modified_ms == *mtime)
+        && !guard
+            .cold_manifest
+            .iter()
+            .any(|(p, m)| m.source == "claude" && !guard.files.contains_key(p))
+        && file_marks.iter().all(|(p, agent, len, mtime)| {
+            guard.files.get(p).is_some_and(|old| {
+                old.seen_len == *len && old.modified_ms == *mtime && old.default_agent == *agent
+            })
         })
     {
         return false;
@@ -497,12 +578,12 @@ pub(crate) fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
     let mark_set: HashSet<&Path> = file_marks.iter().map(|(p, ..)| p.as_path()).collect();
     let count_diff = guard.files.len() != file_marks.len();
     guard.files.retain(|p, _| mark_set.contains(p.as_path()));
-    guard.remove_missing_cold_paths("claude", &mark_set);
-    let mut any_changed = count_diff;
+    let cold_removed = guard.remove_missing_cold_paths("claude", &mark_set);
+    let mut any_changed = count_diff || cold_removed;
 
     for (path, default_agent, len, modified_ms) in file_marks {
         if let Some(state) = guard.files.get_mut(&path) {
-            if state.offset == len
+            if state.seen_len == len
                 && state.modified_ms == modified_ms
                 && state.default_agent == default_agent
             {
@@ -514,23 +595,41 @@ pub(crate) fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
                 guard.mark_cold_path_dirty(&path);
             }
             let state = guard.files.get_mut(&path).expect("state present");
+            let prev_offset = state.offset;
+            let prev_calls = state.calls.len();
+            let prev_last = state
+                .calls
+                .last()
+                .map(|r| (r.t, r.input, r.output, r.cache_read, r.cache_write));
             if !was_cold
                 && !was_pruned
-                && len > state.offset
+                && len >= state.offset
                 && state.default_agent == default_agent
             {
-                let _ = read_transcript_incremental(&path, state, routed);
                 state.modified_ms = modified_ms;
-                any_changed = true;
+                let _ = read_transcript_incremental(&path, state, routed);
+                state.seen_len = state.seen_len.max(len);
             } else {
                 state.offset = 0;
+                state.seen_len = 0;
                 state.calls.clear();
                 state.index.clear();
                 state.cold_archived = false;
                 state.index_pruned = false;
                 state.default_agent = default_agent;
-                let _ = read_transcript_incremental(&path, state, routed);
                 state.modified_ms = modified_ms;
+                let _ = read_transcript_incremental(&path, state, routed);
+                state.seen_len = state.seen_len.max(len);
+            }
+            let next_last = state
+                .calls
+                .last()
+                .map(|r| (r.t, r.input, r.output, r.cache_read, r.cache_write));
+            if was_cold
+                || state.offset != prev_offset
+                || state.calls.len() != prev_calls
+                || next_last != prev_last
+            {
                 any_changed = true;
             }
         } else if guard.cold_manifest.get(&path).is_some_and(|m| {
@@ -540,6 +639,7 @@ pub(crate) fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
                 path,
                 TranscriptState {
                     offset: len,
+                    seen_len: len,
                     modified_ms,
                     default_agent,
                     cold_archived: true,
@@ -551,11 +651,12 @@ pub(crate) fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
         } else {
             guard.mark_cold_path_dirty(&path);
             let mut fresh = TranscriptState {
+                modified_ms,
                 default_agent,
                 ..TranscriptState::default()
             };
             let _ = read_transcript_incremental(&path, &mut fresh, routed);
-            fresh.modified_ms = modified_ms;
+            fresh.seen_len = fresh.seen_len.max(len);
             guard.files.insert(path, fresh);
             any_changed = true;
         }

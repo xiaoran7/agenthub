@@ -5,6 +5,7 @@ pub(crate) enum NetworkEvent {
     /// command its journal still holds (`None` when the Gateway does not say).
     Connected(u64, i64, Option<i64>),
     Sent(u64, i64),
+    ResetInboundCommandSeq(u64),
     Frame(u64, Value),
     Offline(u64),
 }
@@ -48,8 +49,9 @@ pub(crate) fn network_loop(
         for _ in outgoing.try_iter() {}
         let result = (|| -> Result<Duration> {
             let mut socket = connect_with_timeout(&url, Duration::from_secs(10))?;
-            set_timeouts(&mut socket, Duration::from_secs(10))?;
-            let challenge = receive(&mut socket)?;
+            let handshake_deadline = Instant::now() + Duration::from_secs(10);
+            let challenge =
+                receive_with_deadline(&mut socket, handshake_deadline, &control.stopped)?;
             let nonce = challenge["nonce"]
                 .as_str()
                 .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -76,7 +78,7 @@ pub(crate) fn network_loop(
                     "capabilities": ["plugins", "plugins_v2", "codex_session_control"],
                 }),
             )?;
-            let ack = receive(&mut socket)?;
+            let ack = receive_with_deadline(&mut socket, handshake_deadline, &control.stopped)?;
             if ack["type"] != "hello_ack" || ack["version"] != 3 {
                 eprintln!(
                     "[Runner Handshake] Server returned non-hello_ack: {:?}",
@@ -87,12 +89,25 @@ pub(crate) fn network_loop(
                         "[Runner Handshake] Server reported command_journal_mismatch, resetting received_command_seq to 0"
                     );
                     command_seq.store(0, Ordering::Release);
+                    let _ = events.send(NetworkEvent::ResetInboundCommandSeq(epoch));
                 }
                 bail!("remote_handshake_rejected");
             }
             // `command_seq` is the Gateway's own high-water mark. An older
             // Gateway does not send it, and then the local watermark stands.
-            let server_command_seq = ack["command_seq"].as_i64();
+            let received_seq = ack["received_seq"]
+                .as_i64()
+                .filter(|&seq| seq >= 0)
+                .ok_or_else(|| anyhow::anyhow!("invalid_remote_ack"))?;
+            let server_command_seq = match ack.get("command_seq") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_i64()
+                        .filter(|&seq| seq >= 0)
+                        .ok_or_else(|| anyhow::anyhow!("invalid_remote_command_seq"))?,
+                ),
+            };
             if let Some(server_command_seq) = server_command_seq
                 && command_seq.load(Ordering::Acquire) > server_command_seq
             {
@@ -103,16 +118,19 @@ pub(crate) fn network_loop(
             }
             events.send(NetworkEvent::Connected(
                 epoch,
-                ack["received_seq"]
-                    .as_i64()
-                    .ok_or_else(|| anyhow::anyhow!("invalid_remote_ack"))?,
+                received_seq,
                 server_command_seq,
             ))?;
-            set_timeouts(&mut socket, Duration::from_millis(50))?;
+            const INBOUND_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(35);
+            let mut read_timeout = AdaptiveReadTimeout::new(Instant::now());
+            set_timeouts(&mut socket, read_timeout.current())?;
             let connected_at = Instant::now();
             let mut heartbeat = Instant::now();
+            let mut last_inbound_at = Instant::now();
             while remote_epoch_is_active(&control, &remote_generation, expected_generation, epoch) {
-                for value in outgoing.try_iter().take(32) {
+                let outbound_batch = drain_prioritized(&outgoing, epoch, OUTBOUND_DRAIN_LIMIT);
+                let mut had_io = !outbound_batch.is_empty();
+                for value in outbound_batch {
                     match value {
                         NetworkSend::Data(e, seq, mut payload) if e == epoch => {
                             crate::privacy::sanitize_workspace_paths_in_json(&mut payload);
@@ -134,17 +152,22 @@ pub(crate) fn network_loop(
                 }
                 match socket.read() {
                     Ok(Message::Text(text)) => {
-                        if let Ok(frame) = serde_json::from_str(text.as_str()) {
-                            if events.send(NetworkEvent::Frame(epoch, frame)).is_err() {
-                                // The consumer is gone, so there is nothing left
-                                // to deliver frames to.
-                                break;
-                            }
+                        had_io = true;
+                        last_inbound_at = Instant::now();
+                        if let Ok(frame) = serde_json::from_str(text.as_str())
+                            && events.send(NetworkEvent::Frame(epoch, frame)).is_err()
+                        {
+                            // The consumer is gone, so there is nothing left
+                            // to deliver frames to.
+                            break;
                         }
+                    }
+                    Ok(Message::Pong(_)) => {
+                        last_inbound_at = Instant::now();
                     }
                     // tungstenite queues the Pong reply itself; answering here
                     // would replace that reply with a second one.
-                    Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
+                    Ok(Message::Ping(_)) => {}
                     Ok(Message::Close(_)) => break,
                     Err(tungstenite::Error::Io(error))
                         if matches!(
@@ -153,6 +176,19 @@ pub(crate) fn network_loop(
                         ) => {}
                     Err(error) => return Err(error.into()),
                     _ => {}
+                }
+                let now = Instant::now();
+                let next_timeout = if had_io {
+                    read_timeout.note_activity(now)
+                } else {
+                    read_timeout.maybe_relax(now)
+                };
+                if let Some(duration) = next_timeout {
+                    set_timeouts(&mut socket, duration)?;
+                }
+                if last_inbound_at.elapsed() > INBOUND_HEARTBEAT_TIMEOUT {
+                    eprintln!("{{\"code\":\"remote_heartbeat_timeout\"}}");
+                    bail!("remote_heartbeat_timeout");
                 }
                 if heartbeat.elapsed() >= Duration::from_secs(10) {
                     send(

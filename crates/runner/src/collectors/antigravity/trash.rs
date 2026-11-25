@@ -27,6 +27,30 @@ pub fn delete_antigravity_session(session_id: &str) -> Result<PathBuf, Collector
     delete_antigravity_session_in(&user_home, &homes, &trash_root, raw_id, true)
 }
 
+fn contained_non_symlink_dir(path: &Path, root_canon: &Path) -> Option<PathBuf> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return None;
+    }
+    let canon = dunce::canonicalize(path).ok()?;
+    if !canon.starts_with(root_canon) || canon == root_canon {
+        return None;
+    }
+    Some(canon)
+}
+
+fn is_valid_antigravity_id(id: &str) -> bool {
+    id.len() >= 2
+        && id.len() <= 128
+        && !id.starts_with('-')
+        && !id.contains("..")
+        && !id.contains('/')
+        && !id.contains('\\')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 pub(crate) fn delete_antigravity_session_in(
     user_home: &Path,
     ag_homes: &[PathBuf],
@@ -39,12 +63,7 @@ pub(crate) fn delete_antigravity_session_in(
         program: program.to_owned(),
         source,
     };
-    let valid = raw_id.len() >= 2
-        && raw_id.len() <= 128
-        && raw_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !valid {
+    if !is_valid_antigravity_id(raw_id) {
         return Err(io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "not a valid Antigravity session id",
@@ -62,9 +81,17 @@ pub(crate) fn delete_antigravity_session_in(
     let mut found_in_db = false;
 
     for ag_home in ag_homes {
-        let brain_dir = ag_home.join("brain").join(raw_id);
-        if brain_dir.is_dir() {
-            paths.push(brain_dir);
+        let brain_root = ag_home.join("brain");
+        let brain_root_canon = fs::symlink_metadata(&brain_root)
+            .ok()
+            .filter(|m| !m.file_type().is_symlink() && m.is_dir())
+            .and_then(|_| dunce::canonicalize(&brain_root).ok());
+        let brain_dir = brain_root.join(raw_id);
+        if let Some(ref root_canon) = brain_root_canon
+            && let Some(canon_dir) = contained_non_symlink_dir(&brain_dir, root_canon)
+            && !paths.contains(&canon_dir)
+        {
+            paths.push(canon_dir);
         }
         let db = read_antigravity_db(ag_home, &projects_map);
         if db.contains_key(raw_id) {
@@ -72,9 +99,15 @@ pub(crate) fn delete_antigravity_session_in(
         }
         for (cid, rec) in &db {
             if rec.parent_conversation_id.as_deref() == Some(raw_id) {
-                let child_dir = ag_home.join("brain").join(cid);
-                if child_dir.is_dir() && !paths.contains(&child_dir) {
-                    paths.push(child_dir);
+                if !is_valid_antigravity_id(cid) {
+                    continue;
+                }
+                let child_dir = brain_root.join(cid);
+                if let Some(ref root_canon) = brain_root_canon
+                    && let Some(canon_child) = contained_non_symlink_dir(&child_dir, root_canon)
+                    && !paths.contains(&canon_child)
+                {
+                    paths.push(canon_child);
                 }
             }
         }
@@ -156,6 +189,36 @@ mod tests {
             assert!(moved.is_dir());
             assert!(!brain.exists());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_antigravity_session_rejects_same_root_symlink() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ag_home = tmp.path().join(".gemini").join("antigravity");
+        let brain = ag_home.join("brain");
+        let victim = brain.join("victim-conv");
+        let logs = victim.join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).expect("mkdir");
+        let transcript = logs.join("transcript.jsonl");
+        fs::write(&transcript, "{}\n").expect("write");
+        let _ = filetime_or_touch_back(&transcript);
+
+        let symlink_path = brain.join("evil-link");
+        std::os::unix::fs::symlink(&victim, &symlink_path).expect("symlink");
+
+        let trash_root = tmp.path().join("trash");
+        let err = delete_antigravity_session_in(
+            tmp.path(),
+            std::slice::from_ref(&ag_home),
+            &trash_root,
+            "evil-link",
+            false,
+        )
+        .expect_err("symlink session dir must be rejected");
+        assert!(matches!(err, CollectorError::Io { .. }));
+        assert!(victim.is_dir(), "symlink target must remain untouched");
+        assert!(transcript.is_file());
     }
 
     fn filetime_or_touch_back(path: &Path) -> bool {

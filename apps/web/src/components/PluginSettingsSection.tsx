@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import type {
   AgentPlugin,
   RemotePluginsResponse,
@@ -54,10 +60,16 @@ export function PluginSettingsSection({
   const [error, setError] = useState<string | undefined>(undefined);
   const [receipt, setReceipt] = useState<string | undefined>(undefined);
 
+  const ensuredDevicesRef = useRef(false);
+
   useEffect(() => {
-    if (devices === undefined) {
-      onEnsureDevices();
+    if (devices !== undefined) {
+      ensuredDevicesRef.current = false;
+      return;
     }
+    if (ensuredDevicesRef.current) return;
+    ensuredDevicesRef.current = true;
+    onEnsureDevices();
   }, [devices, onEnsureDevices]);
 
   const loadPlugins = useCallback(
@@ -235,9 +247,23 @@ export function PluginSettingsSection({
       </div>
 
       {selectedRunner && (
-        <div
+        <form
           className="settings-toggle"
           style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}
+          onSubmit={(event: FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            if (busyKey !== null) return;
+            void runAction(
+              "set_registry",
+              {
+                action: "set_registry",
+                registry_url: registryInput.trim(),
+              },
+              registryInput.trim()
+                ? "已更新 Runner 插件仓库地址。"
+                : "已恢复默认官方插件仓库地址。",
+            );
+          }}
         >
           <input
             value={registryInput}
@@ -247,25 +273,13 @@ export function PluginSettingsSection({
             style={{ flex: 1, minWidth: 220 }}
           />
           <button
-            type="button"
+            type="submit"
             className="secondary"
             disabled={busyKey !== null}
-            onClick={() =>
-              void runAction(
-                "set_registry",
-                {
-                  action: "set_registry",
-                  registry_url: registryInput.trim(),
-                },
-                registryInput.trim()
-                  ? "已更新 Runner 插件仓库地址。"
-                  : "已恢复默认官方插件仓库地址。",
-              )
-            }
           >
             {busyKey === "set_registry" ? "保存中…" : "保存仓库"}
           </button>
-        </div>
+        </form>
       )}
 
       {error && (

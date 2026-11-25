@@ -71,9 +71,11 @@ impl CodexGatewayProfile {
         command.env("OPENAI_API_KEY", &self.api_key);
 
         if let Some(sid) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
-            let clean_sid = sid.strip_prefix("codex_").unwrap_or(sid);
-            command.env("X_MAGPIE_SESSION", clean_sid);
-            command.env("X_CONVERSATION_ID", clean_sid);
+            let clean_sid = sid.strip_prefix("codex_").unwrap_or(sid).trim();
+            if crate::collectors::process::validate_safe_session_id(clean_sid) {
+                command.env("X_MAGPIE_SESSION", clean_sid);
+                command.env("X_CONVERSATION_ID", clean_sid);
+            }
         }
 
         if let Some(m) = model_override.as_deref() {
@@ -131,9 +133,11 @@ impl AntigravityGatewayProfile {
         command.env("GOOGLE_API_KEY", &self.api_key);
 
         if let Some(sid) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
-            let clean_sid = sid.strip_prefix("antigravity_").unwrap_or(sid);
-            command.env("X_MAGPIE_SESSION", clean_sid);
-            command.env("X_CONVERSATION_ID", clean_sid);
+            let clean_sid = sid.strip_prefix("antigravity_").unwrap_or(sid).trim();
+            if crate::collectors::process::validate_safe_session_id(clean_sid) {
+                command.env("X_MAGPIE_SESSION", clean_sid);
+                command.env("X_CONVERSATION_ID", clean_sid);
+            }
         }
 
         if let Some(m) = model_override.as_deref() {

@@ -19,6 +19,8 @@ pub use crate::collectors::{
 };
 pub use crate::domain::AgentType;
 
+mod live_mirror;
+use live_mirror::*;
 pub mod local_store_scanner;
 pub use local_store_scanner::*;
 pub mod multi_drain;

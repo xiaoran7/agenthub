@@ -14,6 +14,7 @@ pub mod device_name;
 pub mod domain;
 pub mod gateway;
 pub mod live;
+pub(crate) mod lru_cache;
 pub mod model_catalog;
 pub mod outbox;
 pub mod plugins;

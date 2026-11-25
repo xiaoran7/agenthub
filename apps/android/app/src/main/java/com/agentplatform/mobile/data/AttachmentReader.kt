@@ -274,17 +274,21 @@ object AttachmentReader {
      * retried one byte shorter until it decodes, which is at most three steps.
      */
     private fun decodesAsUtf8(bytes: ByteArray): Boolean {
-        var limit = minOf(bytes.size, UTF8_SNIFF_BYTES)
+        if (bytes.isEmpty()) return true
+        val initialLimit = minOf(bytes.size, UTF8_SNIFF_BYTES)
+        val truncatedByCap = bytes.size > UTF8_SNIFF_BYTES
+        var limit = initialLimit
         while (limit > 0) {
             val window = ByteBuffer.wrap(bytes, 0, limit)
             try {
                 StandardCharsets.UTF_8.newDecoder().decode(window)
             } catch (_: CharacterCodingException) {
-                // Either a truncated character at the cut, or genuinely binary.
-                // Dropping the trailing byte and retrying tells the two apart:
-                // a real encoding error needs more than three bytes to fix.
+                // Only trim trailing bytes when the sniff cap could have split
+                // a multi-byte UTF-8 sequence; a file fitting inside the cap
+                // has no split tail so any decode failure is binary.
+                if (!truncatedByCap) return false
                 limit--
-                if (minOf(bytes.size, UTF8_SNIFF_BYTES) - limit > 3) return false
+                if (initialLimit - limit > 3) return false
                 continue
             }
             val text = String(bytes, 0, limit, StandardCharsets.UTF_8)
@@ -295,9 +299,9 @@ object AttachmentReader {
             if (text.indexOf(NUL) >= 0) return false
             // The replacement character means a byte the decoder had to throw
             // away. Latin-1 fills the window with them.
-            return !text.contains('�')
+            return !text.contains('\uFFFD')
         }
-        return true
+        return false
     }
 
     /** How many bytes [decodesAsUtf8] inspects. Visible so tests can build a file that overruns it. */

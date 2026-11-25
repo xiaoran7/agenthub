@@ -55,6 +55,7 @@ export default function RemotePage() {
     <Suspense fallback={<LoadingScreen />}>
       <RemoteConsole
         account={account}
+        onAccountUpdated={setAccount}
         onAuthenticationRequired={requireLogin}
         onLoggedOut={() => setAccount(null)}
         onLogout={() => {

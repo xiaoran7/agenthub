@@ -64,7 +64,7 @@ fn resolves_only_known_windows_codex_npm_shim_layouts() {
 
     assert_eq!(
         resolve_windows_codex_candidate(&shim),
-        native.canonicalize().ok()
+        dunce::canonicalize(&native).ok()
     );
     let unrelated = directory.path().join("other").join("codex.cmd");
     fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
@@ -1336,4 +1336,316 @@ fn normalize_acp_message_resolves_prefixed_plugin_session_turn_ids() {
     assert_eq!(out[0]["method"], "item/agentMessage/delta");
     assert_eq!(out[0]["params"]["turnId"], "turn_real_99");
     assert_eq!(out[0]["params"]["itemId"], "acp_msg:turn_real_99");
+}
+#[test]
+fn claude_trash_cross_device_preserves_backup_and_refuses_non_exdev() {
+    use crate::collectors::claude_trash::{
+        copy_and_remove_cross_device_with, is_cross_device_error, move_into,
+    };
+
+    assert!(is_cross_device_error(&std::io::Error::new(
+        std::io::ErrorKind::CrossesDevices,
+        "exdev",
+    )));
+    #[cfg(unix)]
+    assert!(is_cross_device_error(&std::io::Error::from_raw_os_error(
+        18
+    )));
+    assert!(!is_cross_device_error(&std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "locked",
+    )));
+
+    let dir = tempfile::tempdir().unwrap();
+    let src_dir = dir.path().join("sess-dir");
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::write(src_dir.join("a.jsonl"), "keep-a").unwrap();
+    fs::write(src_dir.join("b.jsonl"), "keep-b").unwrap();
+
+    // Non-cross-device rename error (missing target parent) must fail without deleting source.
+    let bad_target = dir.path().join("missing-parent").join("sess-dir");
+    let err = move_into(&src_dir, &bad_target).expect_err("non-EXDEV rename error must fail");
+    assert!(!is_cross_device_error(&err));
+    assert!(src_dir.join("a.jsonl").is_file());
+    assert!(src_dir.join("b.jsonl").is_file());
+
+    // Simulated cross-device directory move where `remove_dir_all` fails partway through:
+    // the intact backup in `target` must NEVER be deleted.
+    let trash_target = dir.path().join("trash-sess-dir");
+    let err = copy_and_remove_cross_device_with(
+        &src_dir,
+        &trash_target,
+        |p| {
+            let _ = fs::remove_file(p.join("a.jsonl"));
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "b.jsonl locked",
+            ))
+        },
+        |p| fs::remove_file(p),
+    )
+    .expect_err("partial dir removal must report error");
+    assert!(err.to_string().contains("intact backup preserved"));
+    assert!(!src_dir.join("a.jsonl").exists());
+    assert_eq!(
+        fs::read_to_string(trash_target.join("a.jsonl")).unwrap(),
+        "keep-a"
+    );
+    assert_eq!(
+        fs::read_to_string(trash_target.join("b.jsonl")).unwrap(),
+        "keep-b"
+    );
+
+    // Single-file cross-device removal failure is atomic on source, so duplicate target is cleaned.
+    let single_src = dir.path().join("one.jsonl");
+    let single_target = dir.path().join("trash-one.jsonl");
+    fs::write(&single_src, "intact-file").unwrap();
+    copy_and_remove_cross_device_with(
+        &single_src,
+        &single_target,
+        |p| fs::remove_dir_all(p),
+        |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "file locked",
+            ))
+        },
+    )
+    .expect_err("failed single-file removal must error");
+    assert!(single_src.is_file());
+    assert!(!single_target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_trash_rejects_symlinks_and_outside_containment() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("outside");
+    let outside_secret = outside.join("secret.jsonl");
+    let outside_env = outside.join("env");
+    fs::create_dir_all(&outside_env).unwrap();
+    fs::write(&outside_secret, "do-not-move").unwrap();
+    fs::write(outside_env.join("keep.txt"), "do-not-move").unwrap();
+
+    let config_dir = dir.path().join(".claude");
+    let project_dir = config_dir.join("projects").join("proj-a");
+    let env_dir = config_dir.join("session-env");
+    fs::create_dir_all(&project_dir).unwrap();
+    fs::create_dir_all(&env_dir).unwrap();
+
+    // Symlinked main transcript must be rejected.
+    let linked_main = project_dir.join("sess-link.jsonl");
+    std::os::unix::fs::symlink(&outside_secret, &linked_main).unwrap();
+    let trash_root = dir.path().join("trash");
+    crate::collectors::claude_trash::delete_claude_session_in(
+        &config_dir,
+        &trash_root,
+        "sess-link",
+    )
+    .expect_err("symlinked transcript must be rejected");
+    assert!(outside_secret.is_file());
+
+    // Real transcript with symlinked session-env must move only the real transcript.
+    let real_main = project_dir.join("sess-real.jsonl");
+    fs::write(&real_main, "{}\n").unwrap();
+    if let Ok(f) = fs::OpenOptions::new().write(true).open(&real_main) {
+        let _ = f.set_modified(SystemTime::now() - Duration::from_secs(120));
+    }
+    std::os::unix::fs::symlink(&outside_env, env_dir.join("sess-real")).unwrap();
+    let moved = crate::collectors::claude_trash::delete_claude_session_in(
+        &config_dir,
+        &trash_root,
+        "sess-real",
+    )
+    .expect("real transcript should move cleanly");
+    assert!(moved.is_dir());
+    assert!(!real_main.exists());
+    assert!(outside_env.join("keep.txt").is_file());
+}
+
+#[test]
+fn codex_trash_rejects_uncontained_or_mismatched_sqlite_rollout_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex_root = dir.path().join(".codex");
+    let sessions_dir = codex_root.join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let outside_sessions = codex_root.join("target-sess.jsonl");
+    let wrong_name = sessions_dir.join("rollout-2026-other-session.jsonl");
+    fs::write(&outside_sessions, "{}\n").unwrap();
+    fs::write(&wrong_name, "{}\n").unwrap();
+    for p in [&outside_sessions, &wrong_name] {
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(p) {
+            let _ = f.set_modified(SystemTime::now() - Duration::from_secs(120));
+        }
+    }
+
+    let db_path = codex_root.join("state_5.sqlite");
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, source TEXT, rollout_path TEXT, archived INTEGER DEFAULT 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads (id, source, rollout_path) VALUES (?1, '', ?2)",
+        rusqlite::params![
+            "target-sess",
+            outside_sessions.to_string_lossy().to_string()
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads (id, source, rollout_path) VALUES (?1, ?2, ?3)",
+        rusqlite::params![
+            "child-sess",
+            r#"{"subagent":{"thread_spawn":{"parent_thread_id":"target-sess"}}}"#,
+            wrong_name.to_string_lossy().to_string()
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let trash_root = dir.path().join("trash");
+    crate::collectors::codex_trash::delete_codex_session_in(
+        &codex_root,
+        &trash_root,
+        "target-sess",
+    )
+    .expect_err("uncontained or mismatched rollout_path must be rejected");
+    assert!(outside_sessions.is_file());
+    assert!(wrong_name.is_file());
+}
+
+#[test]
+fn lookup_session_context_usage_resolves_antigravity_and_codex_state_n() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+
+    // Antigravity store under `$HOME/.gemini/antigravity/brain/<id>`
+    let ag_logs = home
+        .join(".gemini")
+        .join("antigravity")
+        .join("brain")
+        .join("ag-conv-1")
+        .join(".system_generated")
+        .join("logs");
+    fs::create_dir_all(&ag_logs).unwrap();
+    fs::write(
+        ag_logs.join("transcript.jsonl"),
+        "{\"step_index\":0,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"input_tokens\":12000,\"output_tokens\":300,\"cache_read_tokens\":4000}\n",
+    )
+    .unwrap();
+
+    let ag_usage = lookup_session_context_usage(
+        home,
+        crate::domain::AgentType::Antigravity,
+        "antigravity_ag-conv-1",
+        None,
+    )
+    .expect("Antigravity context usage must resolve from $HOME/.gemini/antigravity");
+    assert!(ag_usage.used >= 12_000);
+
+    // Codex store with `state_6.sqlite` and `codex_` prefix
+    let codex_dir = home.join(".codex");
+    fs::create_dir_all(&codex_dir).unwrap();
+    let db_path = codex_dir.join("state_6.sqlite");
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, title TEXT, tokens_used INTEGER, updated_at INTEGER)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads (id, cwd, title, tokens_used, updated_at) VALUES ('cx-thread-6', '/tmp/ws', 'Hi', 42000, 1700000000)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let cx_usage = lookup_session_context_usage(
+        home,
+        crate::domain::AgentType::Codex,
+        "codex_cx-thread-6",
+        None,
+    )
+    .expect("Codex context usage must strip codex_ prefix and discover state_6.sqlite");
+    assert_eq!(cx_usage.used, 42_000);
+}
+
+#[test]
+fn oversized_claude_line_ignores_tool_use_fields_and_synthetic_model() {
+    let head = r#"{"type":"assistant","message":{"model":"claude-opus-4-6","id":"msg_real_01","role":"assistant","content":[{"type":"tool_use","id":"toolu_fake_99","input":{"model":"gpt-4o","note":"quoted \"model\":\"wrong\""}}]"#;
+    let tail = r#","stop_reason":"tool_use","usage":{"input_tokens":500,"output_tokens":50,"cache_read_input_tokens":100,"cache_creation_input_tokens":0}}}"#;
+
+    let mut ctx =
+        LocalSessionContext::new(crate::domain::AgentType::ClaudeCode, "sess-ov".to_owned());
+    apply_oversized_claude_record(head, tail, &mut ctx);
+    assert_eq!(ctx.model.as_deref(), Some("claude-opus-4-6"));
+    let header_slice = claude_message_header_slice(head);
+    assert_eq!(
+        extract_first_quoted_json_field(header_slice, "id").as_deref(),
+        Some("msg_real_01")
+    );
+    assert_eq!(
+        extract_first_quoted_json_field(header_slice, "model").as_deref(),
+        Some("claude-opus-4-6")
+    );
+    assert_eq!(
+        extract_first_quoted_json_field(
+            r#"{"note":"escaped \"model\":\"fake\"","model":"claude-real"}"#,
+            "model"
+        )
+        .as_deref(),
+        Some("claude-real")
+    );
+
+    // Normal line with `<synthetic>` must be skipped in favor of subsequent real model.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("sess-model.jsonl");
+    let pad = "a".repeat(600_000);
+    let oversized_line = format!(
+        r#"{{"type":"assistant","message":{{"model":"claude-opus-4-6","id":"msg_big","content":[{{"type":"tool_use","id":"toolu_1","input":{{"model":"gpt-4","blob":"{pad}"}}}}]}}}}"#
+    );
+    fs::write(
+        &transcript,
+        format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"model\":\"<synthetic>\"}}}}\n{oversized_line}\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        find_claude_session_model_in_file(&transcript).as_deref(),
+        Some("claude-opus-4-6")
+    );
+}
+
+#[test]
+fn bounded_message_usage_preserves_nonzero_figures_when_zero_follows() {
+    let mut usage = BoundedMessageUsage::default();
+    usage.record("msg_1".to_owned(), (500, 100, 200));
+    usage.record("msg_1".to_owned(), (0, 0, 0));
+    assert_eq!(usage.totals(), (500, 100, 200));
+    assert_eq!(usage.request_count, 1);
+
+    usage.record("msg_2".to_owned(), (0, 0, 0));
+    usage.record("msg_2".to_owned(), (300, 40, 10));
+    assert_eq!(usage.totals(), (800, 140, 210));
+    assert_eq!(usage.request_count, 2);
+}
+#[test]
+fn claude_process_start_fails_fast_on_invalid_resume_session_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = ClaudeProcessSession::start(
+        tmp.path().join("nonexistent-claude"),
+        tmp.path(),
+        Some("--inject-flag"),
+        TurnOptions::default(),
+    )
+    .err()
+    .expect("invalid resume_session_id must fail fast");
+    assert!(
+        matches!(err, CollectorError::Protocol { ref code, .. } if code == "invalid_session_id"),
+        "expected invalid_session_id protocol error, got: {err:?}"
+    );
 }

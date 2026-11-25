@@ -2,26 +2,21 @@
 # Replace the domain and certificate paths with deployment values before enabling.
 #
 # 2.7.0 起 Web 层是 nginx（静态托管 + 同源反代），不再有 Next.js 运行时：
-#   1. 所有 proxy_set_header 统一收口在 server 层，子 location 内严禁再写任何
-#      proxy_set_header，防止触发 nginx header 继承丢失导致 Cookie 白名单失效；
-#   2. /v1 与 /v3/remote/stream 均交给 127.0.0.1:3100（Web 前门）执行会话 Cookie
+#   1. HTTP（80）与 HTTPS（443）拆分独立 server 块，不在明文 HTTP 响应中下发 HSTS；
+#   2. 所有 proxy_set_header 统一收口在 HTTPS server 层，覆盖 X-Forwarded-Host 并剥离
+#      客户端 X-User-Id / Forwarded，子 location 内严禁再写 proxy_set_header 防止继承丢失；
+#   3. /v1 与 /v3/remote/stream 均交给 127.0.0.1:3100（Web 前门）执行会话 Cookie
 #      清洗，仅 Runner 签名握手的 /v3/remote/ws 与 /health 直通网关；
-#   3. 外层不在 location / 覆盖 Cache-Control，保留 /assets/* 的 immutable 强缓存；
-#   4. 任何包含 add_header 的子 location 都重复携带 HSTS，防止 nginx 继承丢失。
+#   4. 外层不在 location / 覆盖 Cache-Control，保留 /assets/* 的 immutable 强缓存；
+#   5. 任何包含 add_header 的子 location 都重复携带 HSTS，防止 nginx 继承丢失。
 
 map $http_upgrade $agenthub_outer_connection {
     default upgrade;
     ""      "";
 }
 
-map "$scheme:$uri" $agenthub_https_redirect {
-    default 0;
-    "~^http:(?!/.well-known/acme-challenge/)" 1;
-}
-
 server {
     listen 80;
-    listen 8443 ssl;
     server_name platform.example.com;
 
     location ^~ /.well-known/acme-challenge/ {
@@ -29,15 +24,23 @@ server {
         root /usr/share/nginx/html;
     }
 
-    if ($agenthub_https_redirect) {
+    location / {
         return 301 https://$host$request_uri;
     }
+}
+
+server {
+    # 标准 HTTPS 端口；若上游 CDN 使用自定义回源端口，请按需调整此处监听端口。
+    listen 443 ssl;
+    http2 on;
+    server_name platform.example.com;
 
     ssl_certificate /etc/letsencrypt/live/platform.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/platform.example.com/privkey.pem;
     ssl_protocols TLSv1.3 TLSv1.2;
-    http2 on;
+
     error_page 497 https://$host$request_uri;
+    client_max_body_size 12m;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
     proxy_http_version 1.1;
@@ -45,6 +48,9 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-User-Id "";
+    proxy_set_header Forwarded "";
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $agenthub_outer_connection;
 

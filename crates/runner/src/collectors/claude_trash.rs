@@ -46,39 +46,65 @@ pub(crate) fn delete_claude_session_in(
             "not a session id",
         )));
     }
+    let config_dir_canon = dunce::canonicalize(config_dir).map_err(io)?;
     let projects = config_dir.join("projects");
-    let mut main: Option<PathBuf> = None;
-    if let Ok(entries) = fs::read_dir(&projects) {
+    let mut main: Option<(PathBuf, PathBuf)> = None;
+    if is_non_symlink_dir(&projects)
+        && dunce::canonicalize(&projects).is_ok_and(|p| p.starts_with(&config_dir_canon))
+        && let Ok(entries) = fs::read_dir(&projects)
+    {
         for project in entries.flatten() {
+            if !project
+                .file_type()
+                .is_ok_and(|ft| !ft.is_symlink() && ft.is_dir())
+            {
+                continue;
+            }
             let candidate = project.path().join(format!("{session_id}.jsonl"));
-            if candidate.is_file() {
-                main = Some(candidate);
+            if let Some(canon_main) = contained_non_symlink(&candidate, &config_dir_canon, false) {
+                main = Some((candidate, canon_main));
                 break;
             }
         }
     }
-    let Some(main) = main else {
+    let Some((raw_main, main)) = main else {
         return Err(io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no such session",
         )));
     };
     let mut paths: Vec<PathBuf> = vec![main.clone()];
-    let folder = main.with_extension("");
-    if folder.is_dir() {
-        paths.push(folder);
+    let folder = raw_main.with_extension("");
+    if let Some(canon_folder) = contained_non_symlink(&folder, &config_dir_canon, true)
+        && !paths.contains(&canon_folder)
+    {
+        paths.push(canon_folder);
     }
     for extra in ["file-history", "session-env"] {
-        let dir = config_dir.join(extra).join(session_id);
-        if dir.is_dir() {
-            paths.push(dir);
+        let extra_root = config_dir.join(extra);
+        if !is_non_symlink_dir(&extra_root) {
+            continue;
+        }
+        let dir = extra_root.join(session_id);
+        if let Some(canon_dir) = contained_non_symlink(&dir, &config_dir_canon, true)
+            && !paths.contains(&canon_dir)
+        {
+            paths.push(canon_dir);
         }
     }
-    if let Ok(todos) = fs::read_dir(config_dir.join("todos")) {
+    let todos_root = config_dir.join("todos");
+    if is_non_symlink_dir(&todos_root)
+        && let Ok(todos) = fs::read_dir(&todos_root)
+    {
         for todo in todos.flatten() {
             let name = todo.file_name().to_string_lossy().to_string();
-            if name.starts_with(&format!("{session_id}-")) && name.ends_with(".json") {
-                paths.push(todo.path());
+            if name.starts_with(&format!("{session_id}-"))
+                && name.ends_with(".json")
+                && let Some(canon_todo) =
+                    contained_non_symlink(&todo.path(), &config_dir_canon, false)
+                && !paths.contains(&canon_todo)
+            {
+                paths.push(canon_todo);
             }
         }
     }
@@ -108,9 +134,11 @@ pub(crate) fn delete_claude_session_in(
     forget_subagents_under(&paths);
     if let Ok(mut guard) = transcript_metadata_cache().write() {
         guard.remove(&main);
+        guard.remove(&raw_main);
     }
     if let Ok(mut guard) = session_context_cache().write() {
         guard.remove(&main);
+        guard.remove(&raw_main);
     }
     Ok(trash)
 }
@@ -167,31 +195,118 @@ fn trash_target(trash: &Path, path: &Path) -> PathBuf {
     target
 }
 
-/// Moves one file or folder into place, across volumes when it must.
-fn move_into(path: &Path, target: &Path) -> Result<(), std::io::Error> {
-    if fs::rename(path, target).is_ok() {
-        return Ok(());
+fn is_non_symlink_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| !meta.file_type().is_symlink() && meta.is_dir())
+}
+
+fn contained_non_symlink(path: &Path, root_canon: &Path, expect_dir: bool) -> Option<PathBuf> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() {
+        return None;
     }
-    // another volume: a copy then a remove is the same move
-    let copied = if path.is_dir() {
+    if expect_dir {
+        if !meta.is_dir() {
+            return None;
+        }
+    } else if !meta.is_file() {
+        return None;
+    }
+    let parent_canon = dunce::canonicalize(path.parent()?).ok()?;
+    if !parent_canon.starts_with(root_canon) {
+        return None;
+    }
+    let canon = dunce::canonicalize(path).ok()?;
+    if !canon.starts_with(root_canon) || canon == root_canon {
+        return None;
+    }
+    Some(canon)
+}
+
+pub(crate) fn is_cross_device_error(err: &std::io::Error) -> bool {
+    if err.kind() == std::io::ErrorKind::CrossesDevices {
+        return true;
+    }
+    #[cfg(unix)]
+    if err.raw_os_error() == Some(18) {
+        return true;
+    }
+    #[cfg(windows)]
+    if err.raw_os_error() == Some(17) {
+        return true;
+    }
+    false
+}
+
+/// Moves one file or folder into place, falling back to copy+remove ONLY on
+/// genuine cross-device errors.
+pub(crate) fn move_into(path: &Path, target: &Path) -> Result<(), std::io::Error> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to move symlink into trash",
+        ));
+    }
+    match fs::rename(path, target) {
+        Ok(()) => Ok(()),
+        Err(err) if is_cross_device_error(&err) => copy_and_remove_cross_device_with(
+            path,
+            target,
+            |p| fs::remove_dir_all(p),
+            |p| fs::remove_file(p),
+        ),
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) fn copy_and_remove_cross_device_with<FD, FF>(
+    path: &Path,
+    target: &Path,
+    remove_dir: FD,
+    remove_file: FF,
+) -> std::io::Result<()>
+where
+    FD: FnOnce(&Path) -> std::io::Result<()>,
+    FF: FnOnce(&Path) -> std::io::Result<()>,
+{
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to copy symlink into trash",
+        ));
+    }
+    let is_dir = meta.is_dir();
+    let copied = if is_dir {
         copy_dir(path, target)
     } else {
         fs::copy(path, target).map(|_| ())
     };
-    copied?;
-    let removed = if path.is_dir() {
-        fs::remove_dir_all(path)
-    } else {
-        fs::remove_file(path)
-    };
-    if let Err(error) = removed {
-        // the copy is a duplicate of something still in the store: take it
-        // back out, so the trash never claims a session it did not get
-        if target.is_dir() {
+    if let Err(err) = copied {
+        if is_dir {
             let _ = fs::remove_dir_all(target);
         } else {
             let _ = fs::remove_file(target);
         }
+        return Err(err);
+    }
+    if is_dir {
+        if let Err(error) = remove_dir(path) {
+            // Never delete `target` after a failed `remove_dir_all`: the source
+            // directory may already be partially removed, making `target` the
+            // only intact backup of the session.
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "copied directory to trash, then failed removing source {}: {error}; intact backup preserved at {}",
+                    path.display(),
+                    target.display()
+                ),
+            ));
+        }
+    } else if let Err(error) = remove_file(path) {
+        // Single-file removal is atomic, so `path` is still intact.
+        let _ = fs::remove_file(target);
         return Err(error);
     }
     Ok(())
@@ -239,14 +354,29 @@ fn written_within_at(path: &Path, now: SystemTime, window: Duration, depth: u32)
         .any(|entry| written_within_at(&entry.path(), now, window, depth + 1))
 }
 
+const COPY_DIR_MAX_DEPTH: u32 = 32;
+
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    copy_dir_bounded(from, to, COPY_DIR_MAX_DEPTH)
+}
+
+fn copy_dir_bounded(from: &Path, to: &Path, max_depth: u32) -> std::io::Result<()> {
+    if max_depth == 0 {
+        return Err(std::io::Error::other(
+            "directory nesting exceeded maximum copy depth",
+        ));
+    }
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
         let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else {
+        if file_type.is_dir() {
+            copy_dir_bounded(&entry.path(), &target, max_depth - 1)?;
+        } else if file_type.is_file() {
             fs::copy(entry.path(), &target)?;
         }
     }

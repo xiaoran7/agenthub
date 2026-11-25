@@ -1,0 +1,500 @@
+.remote-scroll-bottom-btn {
+  position: absolute;
+  bottom: 84px;
+  right: 24px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
+  color: var(--remote-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    transform 0.15s ease,
+    background-color 0.15s ease;
+}
+.remote-scroll-bottom-btn:hover {
+  background: var(--remote-surface-strong, var(--remote-surface));
+  transform: translateY(-2px);
+  border-color: var(--remote-line-strong);
+}
+.remote-scroll-bottom-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.remote-tree-badge-pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: auto;
+  flex-shrink: 0;
+  animation: remote-pulse 2s infinite ease-in-out;
+}
+/* ================= 移动端适配 (≤ 700px) ================= */
+@media (max-width: 700px) {
+  .remote-console {
+    display: flex;
+    flex-direction: column;
+    height: var(--vvh, 100dvh);
+    overflow: hidden;
+    position: relative;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* 隐藏桌面端的分栏拖拽条 */
+
+  .remote-sidebar-resizer {
+    display: none !important;
+  }
+
+  /* 移动端抽屉遮罩 */
+
+  .remote-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.52);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .remote-drawer-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* 移动端侧滑抽屉 (100svh 防浏览器地址栏伸缩抖动，首次挂载零残影) */
+
+  .remote-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    margin: 0 !important;
+    width: min(84vw, 330px) !important;
+    max-width: 330px !important;
+    min-width: 0 !important;
+    height: 100svh !important;
+    max-height: none !important;
+    z-index: 101;
+    background: var(--cds-surface-0, var(--remote-sidebar)) !important;
+    visibility: hidden;
+    pointer-events: none;
+    will-change: transform;
+    transform: translate3d(-105%, 0, 0) !important;
+    transition: none;
+    box-shadow: none !important;
+    border-right: 1px solid var(--cds-border, var(--remote-line));
+    border-bottom: none;
+    padding: max(14px, env(safe-area-inset-top, 0px)) 14px
+      max(16px, env(safe-area-inset-bottom, 0px))
+      max(14px, env(safe-area-inset-left, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overscroll-behavior: contain;
+  }
+
+  .remote-sidebar[data-drawer-animated="true"] {
+    transition:
+      transform 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0.26s;
+  }
+
+  .remote-sidebar.drawer-open {
+    visibility: visible;
+    pointer-events: auto;
+    transform: translate3d(0, 0, 0) !important;
+    box-shadow: 6px 0 28px rgba(0, 0, 0, 0.36) !important;
+    transition:
+      transform 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0s;
+  }
+
+  .remote-composer-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 6px;
+  }
+
+  .remote-composer-actions {
+    margin-left: auto;
+    gap: 6px;
+  }
+
+  .remote-model-selector .cds-select-trigger,
+  .remote-permission-selector .cds-select-trigger,
+  .remote-effort-selector .cds-select-trigger {
+    max-width: 118px;
+    min-height: 36px !important;
+  }
+
+  .remote-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2px;
+  }
+
+  .remote-sidebar .remote-brand {
+    font-size: 17px;
+  }
+
+  .remote-session-tree {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+
+  .remote-sidebar .remote-session {
+    width: 100%;
+    margin: 0;
+    padding: 9px 10px;
+  }
+
+  /* 恢复移动端底部的完整功能（随明暗主题自适应边框色） */
+
+  .remote-sidebar-footer {
+    display: flex !important;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--cds-border, var(--remote-line));
+  }
+
+  .remote-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .remote-main > header {
+    padding: 8px 12px;
+    gap: 8px;
+    border-bottom: 1px solid var(--cds-border, var(--remote-line));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* 手机端收敛五级面包屑，仅保留紧凑根入口与当前工作区，避免顶栏叠成三行 */
+
+  .remote-main-breadcrumb {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    margin-bottom: 2px;
+    gap: 2px;
+  }
+
+  .remote-main-breadcrumb-item:not(:last-child) {
+    display: none;
+  }
+
+  .remote-main-breadcrumb-crumb {
+    max-width: 140px;
+  }
+
+  .remote-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .remote-header-left > div {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .remote-header-left h1 {
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .remote-header-left p {
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .remote-icon-btn.mobile-menu-btn,
+  .remote-icon-btn.mobile-new-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 10px;
+    background: var(--remote-surface);
+    border: 1px solid var(--remote-line);
+    color: var(--remote-ink);
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+  }
+
+  .remote-header-copy-id span {
+    display: none;
+  }
+
+  .remote-header-copy-id.copied span {
+    display: inline;
+  }
+
+  /* 移动端新建会话弹窗升级为底部抽屉 (Bottom Sheet)；Confirm 抽屉规则位于 11-controls-responsive.css 基础规则之后 */
+
+  .remote-modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .remote-launch {
+    width: 100%;
+    max-width: 100%;
+    max-height: min(90dvh, calc(var(--vvh, 100dvh) - 16px));
+    background: var(--remote-raised, #ffffff) !important;
+    border-radius: 20px 20px 0 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding: 18px 18px max(20px, env(safe-area-inset-bottom, 0px));
+    animation: cdsSheetSlideUp 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  .remote-launch .remote-modal-close {
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+  }
+
+  .remote-launch .cds-select-block {
+    height: 44px !important;
+    min-height: 44px !important;
+  }
+
+  .remote-modal-actions {
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .remote-modal-cancel,
+  .remote-modal-submit {
+    flex: 1;
+    height: 44px !important;
+    min-height: 44px !important;
+    font-size: 14.5px !important;
+  }
+
+  /* 修复上下文容量浮层在手机端左溢出的问题 */
+
+  .remote-context-popover {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
+    z-index: 120 !important;
+  }
+
+  .remote-attach-popover {
+    width: min(244px, calc(100vw - 32px));
+  }
+
+  .remote-attach-menu-kbd {
+    display: none;
+  }
+
+  .remote-queued-prompt-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .remote-queued-prompt-btn {
+    min-height: 34px;
+    padding: 0 11px;
+    font-size: 12px;
+  }
+
+  .remote-welcome {
+    padding: 24px 16px;
+  }
+
+  .remote-welcome h2 {
+    font-size: 20px;
+  }
+
+  .remote-welcome p {
+    font-size: 13px;
+  }
+
+  .remote-timeline {
+    padding: 14px 14px 10px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: auto;
+  }
+
+  .remote-notice {
+    width: calc(100% - 24px);
+    margin: 8px auto 0;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  /* On a phone the measure is the screen; the inner bubble caps at 88%. */
+
+  .remote-message.user {
+    max-width: 100%;
+  }
+
+  .remote-message.user > .remote-message-body {
+    max-width: 88%;
+  }
+
+  .remote-message.assistant {
+    max-width: 100%;
+  }
+
+  .remote-approval,
+  .remote-question {
+    padding: 14px 14px;
+    border-radius: 12px;
+  }
+
+  .remote-approval > div,
+  .remote-approval-actions {
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .remote-approval-actions button {
+    width: 100%;
+    min-height: 44px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .remote-question-options {
+    flex-direction: column;
+  }
+
+  .remote-option-btn {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  .remote-question-input-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .remote-question-input-row button {
+    min-height: 44px;
+  }
+
+  /* The hairline above the composer spans the phone, not the measure. */
+
+  .remote-composer-card::before {
+    width: 100%;
+  }
+
+  .remote-composer-card {
+    width: calc(100% - 20px) !important;
+    margin: 12px auto max(10px, env(safe-area-inset-bottom)) !important;
+    padding: 10px 12px 10px 14px !important;
+  }
+
+  .remote-composer-input-wrapper textarea {
+    font-size: 16px !important;
+  }
+
+  .remote-question-input,
+  .remote-launch select,
+  .remote-launch input,
+  .cds-select-filter-input,
+  input[type="search"] {
+    font-size: 16px !important;
+  }
+
+  .remote-send-btn {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .remote-interrupt-btn {
+    min-height: 36px !important;
+    padding: 6px 14px !important;
+  }
+
+  .remote-effort-select {
+    min-height: 36px;
+    font-size: 13px;
+  }
+
+  .remote-composer-toolbar {
+    margin-top: 4px;
+  }
+
+  .remote-scroll-bottom-btn {
+    bottom: 76px;
+    right: 16px;
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .remote-tool.running .remote-tool-summary::after {
+    display: none !important;
+  }
+
+  .remote-tree-badge-pending {
+    animation: none !important;
+  }
+}

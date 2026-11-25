@@ -11,27 +11,7 @@ use super::*;
 /// - `zcode`: `~/.zcode/v2/config.json` + CC Switch (`app_type = 'opencode'`)
 /// - `grok_build`: `~/.grok/config.json` / `~/.grok/settings.json`
 /// - `antigravity`: `~/.gemini/antigravity` / `~/.antigravity` config
-fn default_claude_code_model() -> Option<String> {
-    let home = crate::collectors::home_dir()?;
-    let settings = fs::read_to_string(home.join(".claude").join("settings.json")).ok()?;
-    let value: Value = serde_json::from_str(&settings).ok()?;
-    let env = value.get("env")?;
-    for key in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"] {
-        if let Some(model) = env.get(key).and_then(Value::as_str).map(str::trim)
-            && !model.is_empty()
-        {
-            return Some(
-                crate::claude_gateway::ClaudeGatewayProfile::passthrough_model(Some(model))
-                    .unwrap_or_else(|| model.to_string()),
-            );
-        }
-    }
-    None
-}
-
-pub fn default_upstream_model_for_claude_code() -> Option<String> {
-    default_claude_code_model()
-}
+pub use crate::claude_gateway::default_upstream_model_for_claude_code;
 
 pub(crate) fn desktop_models_for_gateway(
     profile: &crate::claude_gateway::ClaudeGatewayProfile,

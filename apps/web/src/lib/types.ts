@@ -1,41 +1,8 @@
 // Type-only imports: pulling runtime values from @agent-pulse/contracts
 // would drag its node:crypto dependency into the browser bundle.
-import type {
-  AgentType,
-  AuthSnapshot,
-  SyncEvent,
-} from "@agent-pulse/contracts";
+import type { AgentType } from "@agent-pulse/contracts";
 
-export type {
-  ActivityStatus,
-  AgentType,
-  Confidence,
-  ObservationSource,
-  Presence,
-  SessionState,
-  SyncEvent,
-  WaitingReason,
-} from "@agent-pulse/contracts";
-
-export type {
-  AuthSnapshot,
-  AuthState,
-  CredentialSource,
-  QuotaSnapshot,
-  QuotaState,
-  QuotaWindow,
-} from "@agent-pulse/contracts";
-
-/** Session snapshot or timeline event as returned by the gateway read API. */
-export interface SessionRecord extends SyncEvent {
-  received_at: string;
-}
-
-/** Redacted authentication/quota view returned by `GET /v1/device-auth`. */
-export interface AuthRecord extends AuthSnapshot {
-  device_id: string;
-  received_at: string;
-}
+export type { AgentType } from "@agent-pulse/contracts";
 
 /** Device as returned by `GET /v1/devices`. */
 export interface DeviceRecord {

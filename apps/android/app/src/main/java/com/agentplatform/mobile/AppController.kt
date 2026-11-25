@@ -19,14 +19,19 @@ import com.agentplatform.mobile.data.ServerAddressStore
 import com.agentplatform.mobile.data.Snapshot
 import com.agentplatform.mobile.data.describeGatewayError
 import com.agentplatform.mobile.data.mergeHostHello
+import com.agentplatform.mobile.data.optNullableString
 import java.io.Closeable
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -81,11 +86,16 @@ class AppController(
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val ledger = CommandLedger()
-    @Volatile
-    private var pollGeneration = 0L
+    private val pollGeneration = AtomicLong(0L)
+    private val sessionEpoch = AtomicLong(0L)
+    private val configMutex = Mutex()
+    private val lastPersistedEpoch = AtomicLong(0L)
+    private val pluginsRequestSeq = AtomicLong(0L)
+    private var authJob: Job? = null
 
     private var clientConfig: AppConfig? = null
     private var client: AgentGateway? = null
+    private var configPendingSave = false
     private var queuedPrompts by mutableStateOf<Map<String, com.agentplatform.mobile.data.QueuedPromptDraft>>(emptyMap())
 
     internal fun queuedPromptFor(sessionKey: String): com.agentplatform.mobile.data.QueuedPromptDraft? =
@@ -106,7 +116,7 @@ class AppController(
     private val helloFetchedAtMs = HashMap<String, Long>()
     private val helloInFlight = HashSet<String>()
     private var pluginsFetchedAtMs = 0L
-    private var pluginsInFlight = false
+    private var activePluginsFetchSeq = 0L
 
     var state by mutableStateOf(
         AppUiState(
@@ -150,6 +160,7 @@ class AppController(
 
     suspend fun loadRunnerHello(runnerId: String, force: Boolean = true): HostDevice? {
         val gw = gateway ?: return null
+        val epoch = sessionEpoch.get()
         val now = System.currentTimeMillis()
         if (!force) {
             val last = helloFetchedAtMs[runnerId] ?: 0L
@@ -157,33 +168,42 @@ class AppController(
         }
         if (!helloInFlight.add(runnerId)) return state.snapshot.host(runnerId)
         return try {
-            withContext(Dispatchers.IO) { gw.fetchRunnerHello(runnerId) }?.also { device ->
+            val device = withContext(Dispatchers.IO) { gw.fetchRunnerHello(runnerId) }
+            if (epoch != sessionEpoch.get()) return null
+            device?.also {
                 helloFetchedAtMs[runnerId] = System.currentTimeMillis()
-                updateHostDevice(device)
+                updateHostDevice(it)
             }
         } finally {
-            helloInFlight.remove(runnerId)
+            if (epoch == sessionEpoch.get()) {
+                helloInFlight.remove(runnerId)
+            }
         }
     }
 
     suspend fun loadPlugins(force: Boolean = false): List<AgentPlugin>? {
         val gw = gateway ?: return null
+        val epoch = sessionEpoch.get()
         val now = System.currentTimeMillis()
         if (!force && state.plugins != null && now - pluginsFetchedAtMs < PLUGINS_TTL_MS) {
             return state.plugins
         }
-        if (pluginsInFlight) return state.plugins
-        pluginsInFlight = true
+        if (!force && activePluginsFetchSeq != 0L && activePluginsFetchSeq == pluginsRequestSeq.get()) {
+            return state.plugins
+        }
+        val seq = pluginsRequestSeq.incrementAndGet()
+        activePluginsFetchSeq = seq
         return try {
-            runCatching { withContext(Dispatchers.IO) { gw.fetchPluginsResponse() } }
-                .getOrNull()
-                ?.also { resp ->
-                    pluginsFetchedAtMs = System.currentTimeMillis()
-                    state = state.copy(plugins = resp.plugins, pluginRunners = resp.runners)
-                }
-                ?.plugins
+            val resp = runCatching { withContext(Dispatchers.IO) { gw.fetchPluginsResponse() } }.getOrNull()
+            if (epoch != sessionEpoch.get() || seq != pluginsRequestSeq.get()) return state.plugins
+            resp?.also {
+                pluginsFetchedAtMs = System.currentTimeMillis()
+                state = state.copy(plugins = it.plugins, pluginRunners = it.runners)
+            }?.plugins
         } finally {
-            pluginsInFlight = false
+            if (epoch == sessionEpoch.get() && activePluginsFetchSeq == seq) {
+                activePluginsFetchSeq = 0L
+            }
         }
     }
 
@@ -200,6 +220,7 @@ class AppController(
             onResult(Result.failure(GatewayException(0, "not_configured")))
             return
         }
+        val epoch = sessionEpoch.get()
         scope.launch {
             val res =
                 runCatching {
@@ -213,8 +234,9 @@ class AppController(
                         )
                     }
                 }
-            if (res.exceptionOrNull() is CancellationException) return@launch
+            if (res.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) return@launch
             res.onSuccess { list ->
+                pluginsRequestSeq.incrementAndGet()
                 pluginsFetchedAtMs = System.currentTimeMillis()
                 val nextRunners =
                     if (state.pluginRunners.any { it.runnerId == runnerId }) {
@@ -244,6 +266,7 @@ class AppController(
                 state = state.copy(pluginRunners = nextRunners, plugins = byId.values.toList())
                 loadPlugins(force = true)
             }
+            if (epoch != sessionEpoch.get()) return@launch
             onResult(res)
         }
     }
@@ -258,25 +281,27 @@ class AppController(
             onResult(Result.failure(GatewayException(0, "not_configured")))
             return
         }
+        val epoch = sessionEpoch.get()
         scope.launch {
+            val raw = runCatching { withContext(Dispatchers.IO) { gw.togglePlugin(pluginId, enabled) } }
+            if (raw.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) return@launch
             val res =
-                runCatching { withContext(Dispatchers.IO) { gw.togglePlugin(pluginId, enabled) } }
-                    .map { plugin ->
-                        val currentPlugins = state.plugins.orEmpty()
-                        if (plugin != null) {
-                            if (currentPlugins.any { it.id == plugin.id }) {
-                                currentPlugins.map { if (it.id == plugin.id) plugin else it }
-                            } else {
-                                currentPlugins + plugin
-                            }
+                raw.map { plugin ->
+                    val currentPlugins = state.plugins.orEmpty()
+                    if (plugin != null) {
+                        if (currentPlugins.any { it.id == plugin.id }) {
+                            currentPlugins.map { if (it.id == plugin.id) plugin else it }
                         } else {
-                            currentPlugins.map {
-                                if (it.id == pluginId) it.copy(enabled = enabled) else it
-                            }
+                            currentPlugins + plugin
+                        }
+                    } else {
+                        currentPlugins.map {
+                            if (it.id == pluginId) it.copy(enabled = enabled) else it
                         }
                     }
-            if (res.exceptionOrNull() is CancellationException) return@launch
+                }
             res.onSuccess { list ->
+                pluginsRequestSeq.incrementAndGet()
                 pluginsFetchedAtMs = System.currentTimeMillis()
                 state = state.copy(plugins = list)
             }
@@ -290,9 +315,10 @@ class AppController(
             onResult(Result.failure(GatewayException(0, "not_configured")))
             return
         }
+        val epoch = sessionEpoch.get()
         scope.launch {
             val res = runCatching { withContext(Dispatchers.IO) { gw.createDeviceBinding() } }
-            if (res.exceptionOrNull() is CancellationException) return@launch
+            if (res.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) return@launch
             onResult(res)
         }
     }
@@ -303,9 +329,10 @@ class AppController(
             onResult(Result.failure(GatewayException(0, "not_configured")))
             return
         }
+        val epoch = sessionEpoch.get()
         scope.launch {
             val res = runCatching { withContext(Dispatchers.IO) { gw.revokeDevice(runnerId) } }
-            if (res.exceptionOrNull() is CancellationException) return@launch
+            if (res.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) return@launch
             res.onSuccess {
                 helloFetchedAtMs.remove(runnerId)
                 refresh()
@@ -316,6 +343,7 @@ class AppController(
 
     val gateway: AgentGateway?
         get() {
+            if (configPendingSave) return null
             val config = state.config ?: return null
             val held = client
             if (held != null && clientConfig == config) return held
@@ -332,35 +360,92 @@ class AppController(
         }
     }
 
+    private suspend fun persistConfig(config: AppConfig, epoch: Long): Result<Boolean> =
+        configMutex.withLock {
+            if (epoch != sessionEpoch.get()) return@withLock Result.success(false)
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    if (epoch != sessionEpoch.get()) return@runCatching false
+                    configStore.save(config)
+                    lastPersistedEpoch.set(epoch)
+                    true
+                }
+            }
+        }
+
+    private fun enqueueClearStore(clearEpoch: Long) {
+        scope.launch {
+            configMutex.withLock {
+                if (clearEpoch < lastPersistedEpoch.get()) return@withLock
+                withContext(Dispatchers.IO) {
+                    runCatching { configStore.clear() }
+                    Unit
+                }
+            }
+        }
+    }
+
+    private fun clearTransientSessionCaches() {
+        client = null
+        clientConfig = null
+        configPendingSave = false
+        queuedPrompts = emptyMap()
+        helloFetchedAtMs.clear()
+        helloInFlight.clear()
+        pluginsFetchedAtMs = 0L
+        activePluginsFetchSeq = 0L
+        pluginsRequestSeq.incrementAndGet()
+    }
+
+    private fun resetSessionState(clearStore: Boolean = false) {
+        val epoch = sessionEpoch.incrementAndGet()
+        pollGeneration.incrementAndGet()
+        clearTransientSessionCaches()
+        state =
+            state.copy(
+                config = if (clearStore) null else state.config,
+                snapshot = Snapshot.Empty,
+                plugins = null,
+                pluginRunners = emptyList(),
+                lastUpdatedAt = null,
+            )
+        if (clearStore) {
+            enqueueClearStore(epoch)
+        }
+    }
+
+    private suspend fun probeSavedCredential(config: AppConfig, epoch: Long) {
+        val probeClient = AgentGateway(config)
+        val res = runCatching { withContext(Dispatchers.IO) { probeClient.account() } }
+        if (res.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) return
+        res
+            .onSuccess { account ->
+                state = state.copy(account = account, authenticating = false, error = null)
+                refresh()
+            }
+            .onFailure { failure ->
+                if ((failure as? GatewayException)?.status == 401) {
+                    resetSessionState(clearStore = true)
+                    state =
+                        state.copy(
+                            config = null,
+                            account = null,
+                            authenticating = false,
+                            loading = false,
+                            error = describeGatewayError(failure),
+                        )
+                } else {
+                    state = state.copy(authenticating = false, error = describeGatewayError(failure))
+                }
+            }
+    }
+
     fun signInWithSavedCredential() {
         val config = state.config ?: return
-        val probeClient = AgentGateway(config)
+        authJob?.cancel()
+        val epoch = sessionEpoch.get()
         state = state.copy(authenticating = true, error = null, loggedOut = false)
-        scope.launch {
-            runCatching { withContext(Dispatchers.IO) { probeClient.account() } }
-                .onSuccess { account ->
-                    state = state.copy(account = account, authenticating = false, error = null)
-                    refresh()
-                }
-                .onFailure { failure ->
-                    if ((failure as? GatewayException)?.status == 401) {
-                        configStore.clear()
-                        clientConfig = null
-                        client = null
-                        queuedPrompts = emptyMap()
-                        state =
-                            state.copy(
-                                config = null,
-                                account = null,
-                                plugins = null,
-                                authenticating = false,
-                                error = describeGatewayError(failure),
-                            )
-                    } else {
-                        state = state.copy(authenticating = false, error = describeGatewayError(failure))
-                    }
-                }
-        }
+        authJob = scope.launch { probeSavedCredential(config, epoch) }
     }
 
     fun login(email: String, password: String, gatewayBase: String) {
@@ -371,50 +456,66 @@ class AppController(
             state = state.copy(error = message)
             return
         }
-        val client = AgentGateway(draft.normalized())
+        val loginClient = AgentGateway(draft.normalized())
+        authJob?.cancel()
+        val epoch = sessionEpoch.incrementAndGet()
+        pollGeneration.incrementAndGet()
+        client = null
+        clientConfig = null
+        configPendingSave = false
         state = state.copy(authenticating = true, error = null, loggedOut = false)
-        scope.launch {
-            runCatching { withContext(Dispatchers.IO) { client.login(email, password) } }
-                .onSuccess { result ->
-                    val saved = draft.normalized().copy(sessionCookie = result.sessionCookie)
-                    configStore.save(saved)
-                    helloFetchedAtMs.clear()
-                    pluginsFetchedAtMs = 0L
-                    state =
-                        state.copy(
-                            config = saved,
-                            account = result.account,
-                            plugins = null,
-                            authenticating = false,
-                            error = null,
-                        )
-                    refresh()
-                }
-                .onFailure { failure ->
-                    state = state.copy(authenticating = false, error = describeGatewayError(failure))
-                }
-        }
+        authJob =
+            scope.launch {
+                val res = runCatching { withContext(Dispatchers.IO) { loginClient.login(email, password) } }
+                if (res.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) return@launch
+                res
+                    .onSuccess { result ->
+                        val saved = draft.normalized().copy(sessionCookie = result.sessionCookie)
+                        val saveRes = persistConfig(saved, epoch)
+                        if (saveRes.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) {
+                            return@launch
+                        }
+                        if (saveRes.isFailure) {
+                            state = state.copy(authenticating = false, error = STORAGE_SAVE_ERROR)
+                            return@launch
+                        }
+                        if (saveRes.getOrNull() != true) return@launch
+                        clearTransientSessionCaches()
+                        state =
+                            state.copy(
+                                config = saved,
+                                account = result.account,
+                                snapshot = Snapshot.Empty,
+                                plugins = null,
+                                pluginRunners = emptyList(),
+                                lastUpdatedAt = null,
+                                authenticating = false,
+                                error = null,
+                                loggedOut = false,
+                            )
+                        refresh()
+                    }
+                    .onFailure { failure ->
+                        state = state.copy(authenticating = false, error = describeGatewayError(failure))
+                    }
+            }
     }
 
     fun logout(errorMessage: String? = null) {
         val config = state.config
-        pollGeneration += 1
-        helloFetchedAtMs.clear()
-        pluginsFetchedAtMs = 0L
-        queuedPrompts = emptyMap()
+        authJob?.cancel()
+        authJob = null
+        resetSessionState(clearStore = true)
         if (config != null && config.sessionCookie.isNotBlank()) {
-            val client = AgentGateway(config)
-            scope.launch { withContext(Dispatchers.IO) { client.logout() } }
+            val logoutClient = AgentGateway(config)
+            scope.launch { withContext(Dispatchers.IO) { logoutClient.logout() } }
         }
-        configStore.clear()
-        clientConfig = null
-        client = null
         state =
             state.copy(
                 config = null,
                 account = null,
-                snapshot = Snapshot.Empty,
-                plugins = null,
+                authenticating = false,
+                loading = false,
                 error = errorMessage,
                 loggedOut = true,
             )
@@ -429,16 +530,15 @@ class AppController(
         if (movedDeployment && !sanitized.hasCredential && sanitized.developmentUserId.isBlank()) {
             sanitized.gatewayError()?.let { return it }
             serverAddressStore?.saveGatewayBase(sanitized.gatewayBase)
-            configStore.clear()
-            pollGeneration += 1
-            helloFetchedAtMs.clear()
-            pluginsFetchedAtMs = 0L
+            authJob?.cancel()
+            authJob = null
+            resetSessionState(clearStore = true)
             state =
                 state.copy(
                     config = null,
                     account = null,
-                    snapshot = Snapshot.Empty,
-                    plugins = null,
+                    authenticating = false,
+                    loading = false,
                     error = null,
                     loggedOut = true,
                 )
@@ -449,38 +549,69 @@ class AppController(
         if (sanitized.developmentUserId.isNotBlank()) {
             serverAddressStore?.saveDevUser(sanitized.developmentUserId)
         }
-        configStore.save(sanitized)
-        pollGeneration += 1
+        authJob?.cancel()
+        val epoch = sessionEpoch.incrementAndGet()
+        pollGeneration.incrementAndGet()
+        client = null
+        clientConfig = null
         if (movedDeployment) {
-            helloFetchedAtMs.clear()
-            pluginsFetchedAtMs = 0L
-            queuedPrompts = emptyMap()
+            clearTransientSessionCaches()
         }
+        configPendingSave = true
         state =
             state.copy(
-                config = sanitized,
+                config = if (movedDeployment) null else state.config,
                 account = if (movedDeployment) null else state.account,
                 snapshot = Snapshot.Empty,
                 plugins = if (movedDeployment) null else state.plugins,
+                pluginRunners = if (movedDeployment) emptyList() else state.pluginRunners,
+                lastUpdatedAt = if (movedDeployment) null else state.lastUpdatedAt,
+                authenticating = true,
                 error = null,
+                loggedOut = false,
             )
-        signInWithSavedCredential()
+        authJob =
+            scope.launch {
+                val saveRes =
+                    try {
+                        persistConfig(sanitized, epoch)
+                    } finally {
+                        if (epoch == sessionEpoch.get()) {
+                            configPendingSave = false
+                        }
+                    }
+                if (saveRes.exceptionOrNull() is CancellationException || epoch != sessionEpoch.get()) {
+                    return@launch
+                }
+                if (saveRes.isFailure) {
+                    state = state.copy(authenticating = false, error = STORAGE_SAVE_ERROR)
+                    return@launch
+                }
+                if (saveRes.getOrNull() != true) return@launch
+                state = state.copy(config = sanitized, error = null)
+                probeSavedCredential(sanitized, epoch)
+            }
         return null
     }
 
     suspend fun refresh(): Boolean {
-        val client = gateway ?: return false
+        val gw = gateway ?: return false
         if (state.account == null && state.config?.developmentUserId.isNullOrBlank()) return false
-        val generation = ++pollGeneration
+        val epoch = sessionEpoch.get()
+        val generation = pollGeneration.incrementAndGet()
         if (state.snapshot === Snapshot.Empty) {
             withContext(Dispatchers.Main.immediate) {
-                if (state.snapshot === Snapshot.Empty) state = state.copy(loading = true)
+                if (epoch == sessionEpoch.get() && state.snapshot === Snapshot.Empty) {
+                    state = state.copy(loading = true)
+                }
             }
         }
-        val result = withContext(Dispatchers.IO) { runCatching { client.fetchSnapshot() } }
-        val ok =
-            withContext(Dispatchers.Main.immediate) {
-                if (generation != pollGeneration) return@withContext false
+        val result = withContext(Dispatchers.IO) { runCatching { gw.fetchSnapshot() } }
+        return withContext(Dispatchers.Main.immediate) {
+            if (generation != pollGeneration.get() || epoch != sessionEpoch.get()) {
+                return@withContext false
+            }
+            val ok =
                 result.fold(
                     onSuccess = { snapshot ->
                         val previousHellos =
@@ -519,11 +650,11 @@ class AppController(
                         false
                     },
                 )
+            if (ok) {
+                hydrateFleetMetadata()
             }
-        if (ok) {
-            hydrateFleetMetadata()
+            ok
         }
-        return ok
     }
 
     private fun hydrateFleetMetadata() {
@@ -549,20 +680,25 @@ class AppController(
         action: JSONObject,
         onResult: (Result<CommandReceipt>) -> Unit,
     ) {
-        val client = gateway
-        if (client == null) {
+        val gw = gateway
+        if (gw == null) {
             onResult(Result.failure(GatewayException(0, "not_configured")))
             return
         }
-        val payload = action.toString()
-        val actionName = action.optString("action")
-        val scopeKey = "$runnerId/$hubSessionId"
-        val clientCmdId = ledger.keyFor(scopeKey, actionName, payload)
+        val epoch = sessionEpoch.get()
         scope.launch {
+            val (hash, clientCmdId) =
+                withContext(Dispatchers.Default) {
+                    val payload = action.toString()
+                    val actionName = action.optNullableString("action").orEmpty()
+                    val scopeKey = "$runnerId/$hubSessionId/${hostGeneration.orEmpty()}"
+                    val computedHash = ledger.computeHash(scopeKey, actionName, payload)
+                    computedHash to ledger.keyForHash(computedHash)
+                }
             val result =
                 withContext(Dispatchers.IO) {
                     runCatching {
-                        client.submitCommand(
+                        gw.submitCommand(
                             runnerId = runnerId,
                             hubSessionId = hubSessionId,
                             hostGeneration = hostGeneration,
@@ -573,11 +709,12 @@ class AppController(
                 }
             if (result.exceptionOrNull() is CancellationException) return@launch
             result
-                .onSuccess { ledger.forget(scopeKey, actionName, payload) }
+                .onSuccess { ledger.forgetHash(hash) }
                 .onFailure {
-                    val status = (it as? GatewayException)?.status ?: 0
-                    ledger.forgetIfPermanent(scopeKey, actionName, payload, status)
+                    val gwErr = it as? GatewayException
+                    ledger.forgetHashIfPermanent(hash, gwErr?.status ?: 0, gwErr?.code.orEmpty())
                 }
+            if (epoch != sessionEpoch.get()) return@launch
             onResult(result)
         }
     }
@@ -597,12 +734,16 @@ class AppController(
     }
 
     override fun close() {
-        pollGeneration += 1
+        authJob?.cancel()
+        authJob = null
+        sessionEpoch.incrementAndGet()
+        pollGeneration.incrementAndGet()
         scope.cancel()
     }
 
     private companion object {
         const val HELLO_TTL_MS = 30_000L
         const val PLUGINS_TTL_MS = 60_000L
+        const val STORAGE_SAVE_ERROR = "本机安全存储写入失败，请重启应用后重试。"
     }
 }

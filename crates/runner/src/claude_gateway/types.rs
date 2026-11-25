@@ -340,8 +340,7 @@ impl ClaudeGatewayProfile {
                         .as_deref()
                         .is_none_or(|model| model.to_ascii_lowercase().starts_with("claude-"))
                     {
-                        let configured_default =
-                            crate::model_catalog::default_upstream_model_for_claude_code();
+                        let configured_default = default_upstream_model_for_claude_code();
                         *model_override = preferred_upstream_default(
                             &real_models,
                             model_override.as_deref(),
@@ -444,4 +443,22 @@ pub fn invalidate_claude_gateway_cache() {
     if let Ok(mut guard) = CLAUDE_DESKTOP_GATEWAY_CACHE.write() {
         *guard = None;
     }
+}
+
+pub fn default_upstream_model_for_claude_code() -> Option<String> {
+    let home = crate::device_name::home_dir()?;
+    let settings = fs::read_to_string(home.join(".claude").join("settings.json")).ok()?;
+    let value: Value = serde_json::from_str(&settings).ok()?;
+    let env = value.get("env")?;
+    for key in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"] {
+        if let Some(model) = env.get(key).and_then(Value::as_str).map(str::trim)
+            && !model.is_empty()
+        {
+            return Some(
+                ClaudeGatewayProfile::passthrough_model(Some(model))
+                    .unwrap_or_else(|| model.to_string()),
+            );
+        }
+    }
+    None
 }

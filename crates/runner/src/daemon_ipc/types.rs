@@ -26,6 +26,38 @@ where
     }
 }
 
+#[cfg(unix)]
+pub(crate) fn ensure_private_unix_dir(dir: &std::path::Path, uid: u32) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    if let Ok(meta) = std::fs::symlink_metadata(dir) {
+        if !meta.file_type().is_dir() || meta.file_type().is_symlink() || meta.uid() != uid {
+            return false;
+        }
+    } else if std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .is_err()
+    {
+        return false;
+    }
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    if !meta.file_type().is_dir() || meta.file_type().is_symlink() || meta.uid() != uid {
+        return false;
+    }
+    if std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_err() {
+        return false;
+    }
+    std::fs::symlink_metadata(dir).is_ok_and(|m| {
+        m.file_type().is_dir()
+            && !m.file_type().is_symlink()
+            && m.uid() == uid
+            && (m.mode() & 0o077) == 0
+    })
+}
+
 pub fn default_endpoint(scope: &str) -> String {
     let digest = Sha256::digest(scope.as_bytes());
     let suffix = hex::encode(&digest[..12]);
@@ -35,11 +67,30 @@ pub fn default_endpoint(scope: &str) -> String {
     }
     #[cfg(unix)]
     {
-        // The socket itself is 0600. Including the effective UID also prevents
-        // unrelated users from contending for the same fallback /tmp name.
-        format!("/tmp/agenthubd-{}-{suffix}.sock", unsafe {
-            libc::geteuid()
-        })
+        let uid = unsafe { libc::geteuid() };
+        let file_name = format!("agenthubd-{suffix}.sock");
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+            candidates.push(std::path::PathBuf::from(xdg).join("agenthub"));
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+            candidates.push(std::path::PathBuf::from(home).join(".agenthub").join("run"));
+        }
+        candidates.push(std::path::PathBuf::from(format!("/tmp/agenthub-{uid}")));
+        let env_tmp = std::env::temp_dir().join(format!("agenthub-{uid}"));
+        if !candidates.contains(&env_tmp) {
+            candidates.push(env_tmp);
+        }
+
+        for dir in candidates {
+            let candidate = dir.join(&file_name);
+            if candidate.as_os_str().len() <= 100 && ensure_private_unix_dir(&dir, uid) {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+        // Fail closed: never return an unverified `/tmp/...` directory that an attacker
+        // might pre-create or own. Both `serve` and `connect` reject paths under `/dev/null`.
+        format!("/dev/null/agenthubd-{suffix}.sock")
     }
 }
 

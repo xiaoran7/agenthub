@@ -297,10 +297,7 @@ impl ApiRequest<'_> {
                 });
                 send_json_response(stream, 200, &resp)?;
                 stopped.store(true, Ordering::SeqCst);
-                thread::spawn(|| {
-                    thread::sleep(Duration::from_millis(250));
-                    std::process::exit(0);
-                });
+                crate::tray::cleanup_desktop_window();
             }
             ("POST", "/api/open-data-dir") => {
                 crate::tray::open_data_dir();
@@ -487,14 +484,6 @@ impl ApiRequest<'_> {
                 }
                 match serde_json::from_slice::<BindReq>(body) {
                     Ok(req) => {
-                        let home = std::env::var_os("USERPROFILE")
-                            .or_else(|| std::env::var_os("HOME"))
-                            .map(PathBuf::from);
-                        let Some(home) = home else {
-                            let err_json = json!({ "error": "home_dir_unavailable" });
-                            send_json_response(stream, 500, &err_json)?;
-                            return Ok(());
-                        };
                         let identity = match crate::device::DeviceIdentity::load(&identity_path) {
                             Ok(id) => id,
                             Err(err) => {
@@ -573,7 +562,11 @@ impl ApiRequest<'_> {
                                     "gateway": gateway_url,
                                     "paired_at": chrono::Utc::now().to_rfc3339()
                                 });
-                                let binding_path = home.join(".agenthub").join("binding.json");
+                                let binding_path =
+                                    crate::device_name::binding_path_for_identity(&identity_path);
+                                if let Some(parent) = binding_path.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
                                 let _ = std::fs::write(
                                     &binding_path,
                                     serde_json::to_string_pretty(&binding_info).unwrap_or_default(),
@@ -698,13 +691,8 @@ impl ApiRequest<'_> {
                 }
             }
             ("POST", "/api/device/unbind") => {
-                let home = std::env::var_os("USERPROFILE")
-                    .or_else(|| std::env::var_os("HOME"))
-                    .map(PathBuf::from);
-                if let Some(home) = home {
-                    let binding_path = home.join(".agenthub").join("binding.json");
-                    let _ = std::fs::remove_file(&binding_path);
-                }
+                let binding_path = crate::device_name::binding_path_for_identity(&identity_path);
+                let _ = std::fs::remove_file(&binding_path);
                 let _ = handler.handle(DaemonRequest::SetRemoteEnabled { server_url: None });
                 invalidate_dashboard_summary_cache();
                 if let Ok(mut guard) = device_info_cache().write() {

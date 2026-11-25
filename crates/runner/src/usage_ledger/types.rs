@@ -386,6 +386,9 @@ pub(crate) struct FileMark {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TranscriptState {
     pub(crate) offset: u64,
+    /// Last observed file length on disk (may exceed `offset` when an
+    /// unterminated trailing line was left unread for the next poll).
+    pub(crate) seen_len: u64,
     pub(crate) modified_ms: i64,
     pub(crate) last_user_ms: i64,
     pub(crate) last_assistant_ms: i64,

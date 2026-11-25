@@ -1,4 +1,5 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { readableRemoteText, type ConversationItem } from "../lib/remote";
 import { matchesSelectedOption } from "../lib/remote-session-state";
 import { CheckIcon, CopyIcon } from "./RemoteMessageCard";
@@ -98,15 +99,57 @@ interface QuestionItem {
   multiSelect?: boolean | undefined;
 }
 
-function parseQuestionData(content?: string): QuestionItem[] | null {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseQuestionData(content?: string): QuestionItem[] | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
   try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-      return parsed.questions as QuestionItem[];
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!isPlainObject(parsed)) return null;
+    if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) {
+      return null;
     }
+    const validated: QuestionItem[] = [];
+    for (const rawQuestion of parsed.questions) {
+      if (!isPlainObject(rawQuestion)) return null;
+      if (typeof rawQuestion.question !== "string") return null;
+      let validatedOptions: QuestionItem["options"];
+      if (rawQuestion.options !== undefined) {
+        if (!Array.isArray(rawQuestion.options)) return null;
+        validatedOptions = [];
+        for (const rawOpt of rawQuestion.options) {
+          if (!isPlainObject(rawOpt) || typeof rawOpt.label !== "string") {
+            return null;
+          }
+          validatedOptions.push({
+            label: rawOpt.label,
+            ...(typeof rawOpt.description === "string"
+              ? { description: rawOpt.description }
+              : {}),
+            ...(typeof rawOpt.preview === "string"
+              ? { preview: rawOpt.preview }
+              : {}),
+          });
+        }
+      }
+      validated.push({
+        question: rawQuestion.question,
+        ...(typeof rawQuestion.header === "string"
+          ? { header: rawQuestion.header }
+          : {}),
+        ...(validatedOptions !== undefined
+          ? { options: validatedOptions }
+          : {}),
+        ...(typeof rawQuestion.multiSelect === "boolean"
+          ? { multiSelect: rawQuestion.multiSelect }
+          : {}),
+      });
+    }
+    return validated;
   } catch {
     // not json
   }
@@ -127,16 +170,29 @@ export const RemoteToolCard = memo(function RemoteToolCard({
   );
   const hasDiff = diffStats.additions > 0 || diffStats.deletions > 0;
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   const handleCopy = (section: string, text: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      void navigator.clipboard.writeText(text);
+    void copyTextToClipboard(text).then((ok) => {
+      if (!ok || !mountedRef.current) return;
       setCopiedSection(section);
-      setTimeout(() => {
-        setCopiedSection((cur) => (cur === section ? null : cur));
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) {
+          setCopiedSection((cur) => (cur === section ? null : cur));
+        }
       }, 1800);
-    }
+    });
   };
 
   return (

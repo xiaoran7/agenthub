@@ -1,4 +1,16 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
+
+static CATALOG_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+struct RefreshFlightGuard;
+
+impl Drop for RefreshFlightGuard {
+    fn drop(&mut self) {
+        CATALOG_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
 
 pub(crate) fn validated_upstream_candidate(
     base_url: &str,
@@ -57,6 +69,29 @@ pub fn discover_active_upstream() -> Option<(String, String, String)> {
     None
 }
 
+fn load_matching_disk_cache(active_base_url: Option<&str>) -> Vec<LiveCatalogModel> {
+    let Some(expected) = active_base_url.map(|u| u.trim().trim_end_matches('/')) else {
+        return Vec::new();
+    };
+    load_disk_cache()
+        .filter(|d| d.base_url.trim().trim_end_matches('/') == expected)
+        .map(|d| d.models)
+        .unwrap_or_default()
+}
+
+fn is_loopback_endpoint(base_url: &str) -> bool {
+    url::Url::parse(base_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        .is_some_and(|host| {
+            let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+            trimmed == "localhost"
+                || trimmed == "::1"
+                || trimmed == "127.0.0.1"
+                || trimmed.starts_with("127.")
+        })
+}
+
 /// Fetches the live model catalog from active upstream or local disk cache.
 ///
 /// A machine with no reachable upstream and no cached answer has no catalog to
@@ -67,51 +102,73 @@ pub fn fetch_catalog_models(force_refresh: bool) -> Vec<LiveCatalogModel> {
     // Check in-memory cache (120s TTL, including empty results so unreachable
     // endpoints never block repeated dashboard polls).
     if !force_refresh {
-        if let Ok(guard) = memory_cache().read() {
-            if let Some((cached_at, ref list)) = *guard {
-                if cached_at.elapsed() < Duration::from_secs(120) {
-                    return list.clone();
-                }
-            }
+        if let Ok(guard) = memory_cache().read()
+            && let Some((cached_at, _, ref list)) = *guard
+            && cached_at.elapsed() < Duration::from_secs(120)
+        {
+            return list.clone();
         }
-        // Populate immediately from disk cache (or empty) and refresh in the
-        // background so `/api/dashboard` never blocks on network HTTP timeouts.
-        let initial = load_disk_cache().map(|d| d.models).unwrap_or_default();
+        // Serve disk cache immediately and run upstream discovery + HTTP probing
+        // on at most one background thread so `/api/dashboard` never blocks on
+        // network reachability checks or HTTP timeouts.
+        let disk = load_disk_cache();
+        let cached_base = disk.as_ref().map(|d| d.base_url.clone());
+        let initial = disk.map(|d| d.models).unwrap_or_default();
         if let Ok(mut guard) = memory_cache().write() {
-            *guard = Some((Instant::now(), initial.clone()));
+            *guard = Some((Instant::now(), cached_base, initial.clone()));
         }
-        std::thread::spawn(|| {
-            if let Some((base_url, token, provider_name)) = discover_active_upstream() {
-                let models = fetch_from_endpoint(&base_url, &token, &provider_name);
-                if !models.is_empty() {
-                    save_disk_cache(&base_url, &provider_name, &models);
-                    if let Ok(mut guard) = memory_cache().write() {
-                        *guard = Some((Instant::now(), models));
+        if CATALOG_REFRESH_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let flight = RefreshFlightGuard;
+            let _ = std::thread::Builder::new()
+                .name("model-catalog-refresh".into())
+                .spawn(move || {
+                    let _flight = flight;
+                    if let Some((base_url, token, provider_name)) = discover_active_upstream() {
+                        let models = fetch_from_endpoint(&base_url, &token, &provider_name);
+                        if !models.is_empty() {
+                            save_disk_cache(&base_url, &provider_name, &models);
+                            if let Ok(mut guard) = memory_cache().write() {
+                                *guard = Some((Instant::now(), Some(base_url), models));
+                            }
+                        } else {
+                            let fallback = load_matching_disk_cache(Some(base_url.as_str()));
+                            if let Ok(mut guard) = memory_cache().write() {
+                                *guard = Some((Instant::now(), Some(base_url), fallback));
+                            }
+                        }
+                    } else if let Ok(mut guard) = memory_cache().write() {
+                        *guard = Some((Instant::now(), None, Vec::new()));
                     }
-                }
-            }
-        });
+                });
+        }
         return initial;
     }
 
     // Explicit `force_refresh == true`: synchronous probe
     let upstream = discover_active_upstream();
 
-    if let Some((base_url, token, provider_name)) = upstream {
-        let models = fetch_from_endpoint(&base_url, &token, &provider_name);
+    if let Some((ref base_url, ref token, ref provider_name)) = upstream {
+        let models = fetch_from_endpoint(base_url, token, provider_name);
         if !models.is_empty() {
-            save_disk_cache(&base_url, &provider_name, &models);
+            save_disk_cache(base_url, provider_name, &models);
             if let Ok(mut guard) = memory_cache().write() {
-                *guard = Some((Instant::now(), models.clone()));
+                *guard = Some((Instant::now(), Some(base_url.clone()), models.clone()));
             }
             return models;
         }
     }
 
-    // Fallback to disk cache if live request failed
-    let fallback = load_disk_cache().map(|d| d.models).unwrap_or_default();
+    // Fallback to disk cache only if it matches the active upstream base_url
+    let fallback = load_matching_disk_cache(upstream.as_ref().map(|(b, _, _)| b.as_str()));
     if let Ok(mut guard) = memory_cache().write() {
-        *guard = Some((Instant::now(), fallback.clone()));
+        *guard = Some((
+            Instant::now(),
+            upstream.map(|(b, _, _)| b),
+            fallback.clone(),
+        ));
     }
     fallback
 }
@@ -139,11 +196,13 @@ fn fetch_from_endpoint(base_url: &str, token: &str, provider_name: &str) -> Vec<
         ]
     };
 
-    let agent = ureq::Agent::config_builder()
+    let mut builder = ureq::Agent::config_builder()
         .http_status_as_error(false)
-        .timeout_global(Some(Duration::from_millis(3500)))
-        .build()
-        .new_agent();
+        .timeout_global(Some(Duration::from_millis(3500)));
+    if is_loopback_endpoint(clean_base) {
+        builder = builder.proxy(None);
+    }
+    let agent = builder.build().new_agent();
 
     for url in urls {
         let mut req = agent.get(&url);
@@ -382,14 +441,20 @@ pub(crate) fn merge_live_upstream_models(
     let Some(profile) = profile else {
         return;
     };
-    let active = discover_active_upstream();
-    let same_upstream = active
-        .as_ref()
-        .is_some_and(|(base_url, _, _)| base_url == &profile.base_url);
+    let models = fetch_catalog_models(false);
+    let cached_base = memory_cache()
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().and_then(|(_, base, _)| base.clone()));
+    let expected = profile.base_url.trim().trim_end_matches('/');
+    let same_upstream = cached_base
+        .as_deref()
+        .map(|u| u.trim().trim_end_matches('/'))
+        .is_some_and(|base| !expected.is_empty() && base == expected);
     if !same_upstream {
         return;
     }
-    for model in fetch_catalog_models(false) {
+    for model in models {
         let id = model.id.trim();
         if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
             continue;

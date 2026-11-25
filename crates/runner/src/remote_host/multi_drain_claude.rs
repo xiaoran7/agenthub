@@ -1,5 +1,42 @@
 use super::*;
 
+const MAX_DIFF_JSON_BYTES: usize = 65_536;
+
+fn serialize_bounded_json_diff(
+    mut obj: serde_json::Map<String, Value>,
+    max_bytes: usize,
+) -> String {
+    for _ in 0..16 {
+        let encoded = Value::Object(obj.clone()).to_string();
+        if encoded.len() <= max_bytes {
+            return encoded;
+        }
+        let excess = encoded.len() - max_bytes;
+        let longest_key = obj
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.len())))
+            .max_by_key(|(_, len)| *len)
+            .map(|(k, _)| k);
+        let Some(key) = longest_key else {
+            break;
+        };
+        if let Some(Value::String(s)) = obj.get_mut(&key) {
+            if s.is_empty() {
+                break;
+            }
+            let shrink = (excess / 2).max(1).min(s.len());
+            let target = s.len().saturating_sub(shrink);
+            crate::collectors::truncate_utf8_bytes(s, target);
+        }
+    }
+    for value in obj.values_mut() {
+        if let Value::String(s) = value {
+            s.clear();
+        }
+    }
+    Value::Object(obj).to_string()
+}
+
 impl MultiProviderTransport {
     pub(crate) fn drain_claude_process_sessions(&mut self, messages: &mut Vec<Value>) {
         let mut claude_completed = Vec::new();
@@ -228,56 +265,75 @@ impl MultiProviderTransport {
                                                     input.get("old_string").and_then(Value::as_str),
                                                     input.get("new_string").and_then(Value::as_str),
                                                 ) {
-                                                    let sanitized_old =
+                                                    let mut sanitized_old =
                                                         crate::privacy::redact_paths_inside_text(
                                                             old_str,
                                                         );
-                                                    let sanitized_new =
+                                                    let mut sanitized_new =
                                                         crate::privacy::redact_paths_inside_text(
                                                             new_str,
                                                         );
-                                                    let mut payload = json!({
-                                                        "old_string": sanitized_old,
-                                                        "new_string": sanitized_new,
-                                                    })
-                                                    .to_string();
                                                     crate::collectors::truncate_utf8_bytes(
-                                                        &mut payload,
-                                                        65536,
+                                                        &mut sanitized_old,
+                                                        24_000,
                                                     );
-                                                    Some(payload)
+                                                    crate::collectors::truncate_utf8_bytes(
+                                                        &mut sanitized_new,
+                                                        24_000,
+                                                    );
+                                                    let mut obj = serde_json::Map::new();
+                                                    obj.insert(
+                                                        "old_string".into(),
+                                                        Value::String(sanitized_old),
+                                                    );
+                                                    obj.insert(
+                                                        "new_string".into(),
+                                                        Value::String(sanitized_new),
+                                                    );
+                                                    Some(serialize_bounded_json_diff(
+                                                        obj,
+                                                        MAX_DIFF_JSON_BYTES,
+                                                    ))
                                                 } else if let Some(content) =
                                                     input.get("content").and_then(Value::as_str)
                                                 {
-                                                    let sanitized =
+                                                    let mut sanitized =
                                                         crate::privacy::redact_paths_inside_text(
                                                             content,
                                                         );
-                                                    let mut payload = json!({
-                                                        "new_string": sanitized,
-                                                    })
-                                                    .to_string();
                                                     crate::collectors::truncate_utf8_bytes(
-                                                        &mut payload,
-                                                        65536,
+                                                        &mut sanitized,
+                                                        48_000,
                                                     );
-                                                    Some(payload)
+                                                    let mut obj = serde_json::Map::new();
+                                                    obj.insert(
+                                                        "new_string".into(),
+                                                        Value::String(sanitized),
+                                                    );
+                                                    Some(serialize_bounded_json_diff(
+                                                        obj,
+                                                        MAX_DIFF_JSON_BYTES,
+                                                    ))
                                                 } else if let Some(new_source) =
                                                     input.get("new_source").and_then(Value::as_str)
                                                 {
-                                                    let sanitized =
+                                                    let mut sanitized =
                                                         crate::privacy::redact_paths_inside_text(
                                                             new_source,
                                                         );
-                                                    let mut payload = json!({
-                                                        "new_string": sanitized,
-                                                    })
-                                                    .to_string();
                                                     crate::collectors::truncate_utf8_bytes(
-                                                        &mut payload,
-                                                        65536,
+                                                        &mut sanitized,
+                                                        48_000,
                                                     );
-                                                    Some(payload)
+                                                    let mut obj = serde_json::Map::new();
+                                                    obj.insert(
+                                                        "new_string".into(),
+                                                        Value::String(sanitized),
+                                                    );
+                                                    Some(serialize_bounded_json_diff(
+                                                        obj,
+                                                        MAX_DIFF_JSON_BYTES,
+                                                    ))
                                                 } else if let Some(raw_diff) = input
                                                     .get("diff")
                                                     .or_else(|| input.get("patch"))
@@ -503,7 +559,57 @@ impl MultiProviderTransport {
             self.claude_turn_streamed_deltas.remove(&sid);
         }
         for sid in claude_dead_sessions {
-            self.claude_sessions.remove(&sid);
+            let stderr_hint = self
+                .claude_sessions
+                .remove(&sid)
+                .map(|s| s.last_stderr())
+                .unwrap_or_default();
+            let orphaned_reqs: Vec<String> = self
+                .claude_pending_requests
+                .iter()
+                .filter(|(_, owner)| *owner == &sid)
+                .map(|(req_id, _)| req_id.clone())
+                .collect();
+            for req_id in orphaned_reqs {
+                self.claude_pending_requests.remove(&req_id);
+                messages.push(json!({
+                    "method": "serverRequest/resolved",
+                    "params": {
+                        "threadId": &sid,
+                        "requestId": format!("claude_req_{req_id}")
+                    }
+                }));
+            }
+            if let Some(turn_id) = self.claude_active_turns.remove(&sid) {
+                self.claude_cancels.remove(&sid);
+                self.claude_turn_emitted_text.remove(&sid);
+                self.claude_turn_streamed_deltas.remove(&sid);
+                let err_msg = if stderr_hint.trim().is_empty() {
+                    "Claude 进程意外退出".to_string()
+                } else {
+                    format!("Claude 进程意外退出: {}", stderr_hint.trim())
+                };
+                messages.push(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": &sid,
+                        "turnId": &turn_id,
+                        "willRetry": false,
+                        "error": { "message": &err_msg }
+                    }
+                }));
+                messages.push(json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": sid,
+                        "turn": {
+                            "id": turn_id,
+                            "status": "failed",
+                            "error": err_msg
+                        }
+                    }
+                }));
+            }
         }
     }
 }

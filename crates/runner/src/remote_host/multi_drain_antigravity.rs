@@ -470,7 +470,57 @@ impl MultiProviderTransport {
             self.antigravity_turn_streamed_deltas.remove(&sid);
         }
         for sid in dead_sids {
-            self.antigravity_sessions.remove(&sid);
+            let stderr_hint = self
+                .antigravity_sessions
+                .remove(&sid)
+                .map(|s| s.last_stderr())
+                .unwrap_or_default();
+            let orphaned_reqs: Vec<String> = self
+                .antigravity_pending_requests
+                .iter()
+                .filter(|(_, owner)| *owner == &sid)
+                .map(|(req_id, _)| req_id.clone())
+                .collect();
+            for req_id in orphaned_reqs {
+                self.antigravity_pending_requests.remove(&req_id);
+                messages.push(json!({
+                    "method": "serverRequest/resolved",
+                    "params": {
+                        "threadId": &sid,
+                        "requestId": format!("antigravity_req_{req_id}")
+                    }
+                }));
+            }
+            if let Some(turn_id) = self.antigravity_active_turns.remove(&sid) {
+                self.antigravity_cancels.remove(&sid);
+                self.antigravity_turn_emitted_text.remove(&sid);
+                self.antigravity_turn_streamed_deltas.remove(&sid);
+                let err_msg = if stderr_hint.trim().is_empty() {
+                    "Antigravity 进程意外退出".to_string()
+                } else {
+                    format!("Antigravity 进程意外退出: {}", stderr_hint.trim())
+                };
+                messages.push(json!({
+                    "method": "error",
+                    "params": {
+                        "threadId": &sid,
+                        "turnId": &turn_id,
+                        "willRetry": false,
+                        "error": { "message": &err_msg }
+                    }
+                }));
+                messages.push(json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": sid,
+                        "turn": {
+                            "id": turn_id,
+                            "status": "failed",
+                            "error": err_msg
+                        }
+                    }
+                }));
+            }
         }
     }
 

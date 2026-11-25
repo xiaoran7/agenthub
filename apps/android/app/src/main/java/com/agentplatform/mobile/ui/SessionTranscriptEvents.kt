@@ -2,6 +2,8 @@ package com.agentplatform.mobile.ui
 
 import com.agentplatform.mobile.data.RemoteEvent
 import com.agentplatform.mobile.data.objects
+import com.agentplatform.mobile.data.optNullableString
+import com.agentplatform.mobile.data.optStringOrEmpty
 import com.agentplatform.mobile.data.paramsOf
 import org.json.JSONObject
 
@@ -35,23 +37,23 @@ internal fun splitHistoricalToolValue(value: String): Pair<String?, String?> {
 }
 
 internal fun extractFileChangeDetails(item: JSONObject): Pair<String, String?> {
-    val directPath = item.optString("path").trim()
+    val directPath = item.optStringOrEmpty("path").trim()
     val changes = item.optJSONArray("changes")?.objects().orEmpty()
-    val firstChangePath = changes.firstOrNull()?.optString("path")?.trim().orEmpty()
+    val firstChangePath = changes.firstOrNull()?.optStringOrEmpty("path")?.trim().orEmpty()
     val primaryPath = directPath.ifBlank { firstChangePath }
     val label =
         if (primaryPath.isNotBlank()) "文件修改 · ${fileName(primaryPath)}"
-        else toolLabel(null, item.optString("name").ifBlank { null }).ifBlank { "文件修改" }
+        else toolLabel(null, item.optStringOrEmpty("name").ifBlank { null }).ifBlank { "文件修改" }
 
-    val directDiff = item.optString("diff").ifBlank { item.optString("patch") }
+    val directDiff = item.optStringOrEmpty("diff").ifBlank { item.optStringOrEmpty("patch") }
     if (directDiff.isNotBlank()) return label to directDiff
 
     if (changes.isNotEmpty()) {
         val chunks = mutableListOf<String>()
         for (change in changes) {
-            val rawDiff = change.optString("diff").ifBlank { change.optString("patch") }
+            val rawDiff = change.optStringOrEmpty("diff").ifBlank { change.optStringOrEmpty("patch") }
             if (rawDiff.isBlank()) continue
-            val changePath = change.optString("path").trim().ifBlank { primaryPath }
+            val changePath = change.optStringOrEmpty("path").trim().ifBlank { primaryPath }
             if (rawDiff.startsWith("--- ") || changePath.isBlank()) {
                 chunks += rawDiff
             } else if (rawDiff.startsWith("@@")) {
@@ -63,18 +65,18 @@ internal fun extractFileChangeDetails(item: JSONObject): Pair<String, String?> {
         if (chunks.isNotEmpty()) return label to chunks.joinToString("\n")
     }
 
-    val fallbackInput = item.optString("input").ifBlank { null }
+    val fallbackInput = item.optStringOrEmpty("input").ifBlank { null }
     return label.ifBlank { "文件修改" } to fallbackInput
 }
 
 internal fun reasoningText(item: JSONObject): String {
-    val direct = item.optString("text").trim()
+    val direct = item.optStringOrEmpty("text").trim()
     if (direct.isNotEmpty()) return direct
     val summary = item.optJSONArray("summary")
     if (summary != null && summary.length() > 0) {
         val joined =
             (0 until summary.length())
-                .mapNotNull { summary.optJSONObject(it)?.optString("text")?.trim() }
+                .mapNotNull { summary.optJSONObject(it)?.optStringOrEmpty("text")?.trim() }
                 .filter { it.isNotEmpty() }
                 .joinToString("\n")
         if (joined.isNotEmpty()) return joined
@@ -82,7 +84,7 @@ internal fun reasoningText(item: JSONObject): String {
     val content = item.optJSONArray("content")
     if (content != null && content.length() > 0) {
         return (0 until content.length())
-            .mapNotNull { content.optJSONObject(it)?.optString("text")?.trim() }
+            .mapNotNull { content.optJSONObject(it)?.optStringOrEmpty("text")?.trim() }
             .filter { it.isNotEmpty() }
             .joinToString("\n")
     }
@@ -102,11 +104,21 @@ internal fun foldEventsRange(
         val item = params.optJSONObject("item")
         val eventTurnId = extractEventTurnId(params)
         if (eventTurnId != null) fold.seenTurnIds.add(eventTurnId)
-        val eventId = params.optString("itemId").ifBlank { item?.optString("id").orEmpty() }
+        val rawEventId = params.optNullableString("itemId") ?: item?.optNullableString("id").orEmpty()
+        val scopeTurnId =
+            eventTurnId
+                ?: envelope.event?.optJSONObject("binding")?.optNullableString("current_turn_id")
+                ?: fold.liveTurnId
+        val eventId =
+            if (scopeTurnId != null && (rawEventId == "claude_msg" || rawEventId == "claude_thinking")) {
+                "$scopeTurnId:$rawEventId"
+            } else {
+                rawEventId
+            }
 
         when (kind) {
             "turn/started" -> {
-                val turn = params.optJSONObject("turn")?.optString("id").orEmpty()
+                val turn = params.optJSONObject("turn")?.optStringOrEmpty("id").orEmpty()
                 if (turn.isNotEmpty()) fold.seenTurnIds.add(turn)
                 fold.liveTurnId = turn.ifEmpty { null }
                 fold.prompts[turn]?.let { prompt ->
@@ -132,7 +144,7 @@ internal fun foldEventsRange(
             "item/reasoning/summaryTextDelta",
             -> {
                 if (eventId.isEmpty()) continue
-                val delta = params.optString("delta").ifEmpty { params.optString("text") }
+                val delta = params.optStringOrEmpty("delta").ifEmpty { params.optStringOrEmpty("text") }
                 if (delta.isEmpty()) continue
                 val existing = fold.byId(eventId)
                 if (existing == null) {
@@ -160,7 +172,7 @@ internal fun foldEventsRange(
             }
             "item/agentMessage/delta" -> {
                 if (eventId.isEmpty()) continue
-                val delta = params.optString("delta")
+                val delta = params.optStringOrEmpty("delta")
                 if (delta.isEmpty()) continue
                 val existing = fold.byId(eventId)
                 if (existing == null) {
@@ -171,8 +183,8 @@ internal fun foldEventsRange(
                                 id = eventId,
                                 kind = TranscriptKind.TOOL,
                                 title = "命令执行",
-                                command = call.optString("command"),
-                                description = call.optString("description"),
+                                command = call.optStringOrEmpty("command"),
+                                description = call.optStringOrEmpty("description"),
                                 state = ToolState.RUNNING,
                                 turnId = eventTurnId,
                                 text = "工具执行中…",
@@ -192,7 +204,7 @@ internal fun foldEventsRange(
             }
             "item/commandExecution/outputDelta" -> {
                 if (eventId.isEmpty()) continue
-                val delta = params.optString("delta")
+                val delta = params.optStringOrEmpty("delta")
                 if (delta.isEmpty()) continue
                 val existing = fold.byId(eventId)
                 if (existing == null) {
@@ -213,7 +225,7 @@ internal fun foldEventsRange(
             }
             "item/fileChange/outputDelta" -> {
                 if (eventId.isEmpty()) continue
-                val delta = params.optString("delta")
+                val delta = params.optStringOrEmpty("delta")
                 if (delta.isEmpty()) continue
                 val existing = fold.byId(eventId)
                 if (existing == null) {
@@ -235,7 +247,7 @@ internal fun foldEventsRange(
             "item/started", "item/completed" -> {
                 if (eventId.isEmpty() || item == null) continue
                 val completed = kind == "item/completed"
-                when (item.optString("type")) {
+                when (item.optStringOrEmpty("type")) {
                     "userMessage" -> {
                         if (fold.positions[eventId] != null) continue
                         val text = textOf(item)
@@ -257,7 +269,7 @@ internal fun foldEventsRange(
                     "agentMessage" -> {
                         val existing = fold.byId(eventId)
                         if (existing != null && existing.kind != TranscriptKind.ASSISTANT) continue
-                        val text = item.optString("text")
+                        val text = item.optStringOrEmpty("text")
                         val call = bareToolCall(text)
                         if (call != null) {
                             fold.put(
@@ -265,8 +277,8 @@ internal fun foldEventsRange(
                                     id = eventId,
                                     kind = TranscriptKind.TOOL,
                                     title = "命令执行",
-                                    command = call.optString("command"),
-                                    description = call.optString("description"),
+                                    command = call.optStringOrEmpty("command"),
+                                    description = call.optStringOrEmpty("description"),
                                     state = if (completed) ToolState.COMPLETED else ToolState.RUNNING,
                                     turnId = eventTurnId,
                                     text = if (completed) "工具执行已完成" else "工具执行中…",
@@ -292,7 +304,7 @@ internal fun foldEventsRange(
                         )
                     }
                     "reasoning", "thinking" -> {
-                        val failure = item.optString("failureReason")
+                        val failure = item.optStringOrEmpty("failureReason")
                         val existing = fold.byId(eventId)
                         val prevInner =
                             existing?.text
@@ -324,13 +336,17 @@ internal fun foldEventsRange(
                     }
                     "commandExecution" -> {
                         val command =
-                            item.optString("command").ifBlank { item.optString("commandLine") }
+                            item.optNullableString("command")
+                                ?: item.optNullableString("commandLine")
+                                ?: item.optJSONObject("input")?.optNullableString("command")
+                                ?: ""
                         val output =
-                            item.optString("aggregatedOutput")
-                                .ifBlank { item.optString("output") }
-                                .ifBlank { item.optString("stdout") }
+                            item.optNullableString("aggregatedOutput")
+                                ?: item.optNullableString("output")
+                                ?: item.optNullableString("stdout")
+                                ?: ""
                         val toolNameLabel =
-                            if (command.isBlank()) item.optString("toolName").trim() else ""
+                            if (command.isBlank()) item.optStringOrEmpty("toolName").trim() else ""
                         val toolState = itemState(item, completed)
                         val existing = fold.byId(eventId)
                         if (existing != null) {
@@ -363,11 +379,11 @@ internal fun foldEventsRange(
                     "toolCall", "functionCall", "mcpToolCall", "customToolCall", "tool" -> {
                         val existing = fold.byId(eventId)
                         val cmd =
-                            item.optString("input")
-                                .ifBlank { item.optString("arguments").ifBlank { existing?.command.orEmpty() } }
+                            item.optStringOrEmpty("input")
+                                .ifBlank { item.optStringOrEmpty("arguments").ifBlank { existing?.command.orEmpty() } }
                                 .ifBlank { null }
                         val out =
-                            item.optString("output")
+                            item.optStringOrEmpty("output")
                                 .ifBlank { existing?.output.orEmpty() }
                                 .ifBlank { null }
                         fold.put(
@@ -376,9 +392,9 @@ internal fun foldEventsRange(
                                 kind = TranscriptKind.TOOL,
                                 title =
                                     toolLabel(
-                                        item.optString("server").ifBlank { null },
-                                        item.optString("tool")
-                                            .ifBlank { item.optString("name") }
+                                        item.optStringOrEmpty("server").ifBlank { null },
+                                        item.optStringOrEmpty("tool")
+                                            .ifBlank { item.optStringOrEmpty("name") }
                                             .ifBlank { null },
                                     ),
                                 command = cmd,
@@ -392,7 +408,7 @@ internal fun foldEventsRange(
                         val existing = fold.byId(eventId)
                         val (label, diff) = extractFileChangeDetails(item)
                         val out =
-                            item.optString("output")
+                            item.optStringOrEmpty("output")
                                 .ifBlank { existing?.output.orEmpty() }
                                 .ifBlank { null }
                         fold.put(

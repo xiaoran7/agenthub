@@ -156,6 +156,7 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
     let agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_millis(1800)))
+        .max_redirects(0)
         .build()
         .new_agent();
 

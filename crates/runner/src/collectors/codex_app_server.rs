@@ -231,6 +231,17 @@ impl CodexAppServer {
         method: &str,
         timeout: Duration,
     ) -> Result<Option<Value>, CollectorError> {
+        if let Some(pos) = self
+            .pending_messages
+            .iter()
+            .position(|m| m.get("method").and_then(Value::as_str) == Some(method))
+        {
+            let message = self
+                .pending_messages
+                .remove(pos)
+                .expect("notification index in bounds");
+            return Ok(message.get("params").cloned());
+        }
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());

@@ -539,4 +539,91 @@ mod inbound_journal_tests {
             "incremental vacuum should reclaim trimmed/acked pages"
         );
     }
+
+    #[test]
+    fn journal_rejects_negative_watermark_and_inbound_resets() {
+        let (_dir, mut journal) = open();
+        assert!(matches!(
+            journal.reset_watermarks_and_outbox(-1),
+            Err(JournalError::InvalidAck)
+        ));
+        assert!(matches!(
+            journal.reset_inbound_command_seq(-1),
+            Err(JournalError::InvalidAck)
+        ));
+        assert_eq!(journal.watermarks().unwrap(), (0, 0));
+        assert_eq!(journal.received_command_seq().unwrap(), 0);
+    }
+
+    #[test]
+    fn history_snapshot_and_command_output_escape_explosion_stay_under_frame_cap() {
+        // Control chars expand 6x in JSON (\u0001). Even 20 items x 256 KiB of control chars
+        // (~30 MiB if unbudgeted) must stay strictly below MAX_PROJECTED_FRAME_BYTES.
+        let explosive = "\u{0001}".repeat(256 * 1024);
+        let items: Vec<Value> = (0..20)
+            .map(|i| {
+                json!({
+                    "role": "assistant",
+                    "kind": "message",
+                    "text": format!("{i}:{explosive}")
+                })
+            })
+            .collect();
+        let hist_event = crate::remote_host::HostEvent {
+            event_id: "hist-big".into(),
+            host_generation: "gen-1".into(),
+            hub_session_id: Some("hub-1".into()),
+            provider_session_id: Some("sess-1".into()),
+            kind: "history/snapshot".into(),
+            raw: json!({"method": "history/snapshot", "params": {"items": items}}),
+            binding: None,
+            approval_id: None,
+            approval: None,
+            question_id: None,
+            question: None,
+        };
+        let projected = projected_remote_event(&hist_event).unwrap();
+        let encoded = serde_json::to_vec(&projected).unwrap();
+        assert!(
+            encoded.len() <= MAX_PROJECTED_FRAME_BYTES,
+            "projected history/snapshot exceeded frame cap: {}",
+            encoded.len()
+        );
+        assert_eq!(
+            projected["event"]["raw"]["params"]["truncated"],
+            json!(true)
+        );
+
+        // Array of many strings in item/completed commandExecution shares a total JSON budget.
+        let big_chunks: Vec<Value> = (0..12).map(|_| json!("\"".repeat(512 * 1024))).collect();
+        let cmd_event = crate::remote_host::HostEvent {
+            event_id: "cmd-big".into(),
+            host_generation: "gen-1".into(),
+            hub_session_id: Some("hub-1".into()),
+            provider_session_id: Some("sess-1".into()),
+            kind: "item/completed".into(),
+            raw: json!({
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "cmd-1",
+                        "type": "commandExecution",
+                        "output": big_chunks
+                    }
+                }
+            }),
+            binding: None,
+            approval_id: None,
+            approval: None,
+            question_id: None,
+            question: None,
+        };
+        let projected_cmd = projected_remote_event(&cmd_event).unwrap();
+        let encoded_cmd = serde_json::to_vec(&projected_cmd).unwrap();
+        assert!(
+            encoded_cmd.len() <= MAX_PROJECTED_FRAME_BYTES,
+            "projected commandExecution exceeded frame cap: {}",
+            encoded_cmd.len()
+        );
+    }
 }

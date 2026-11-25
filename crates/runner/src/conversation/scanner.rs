@@ -88,6 +88,17 @@ pub(crate) fn find_provider_transcript(
     matches.into_iter().next()
 }
 
+pub(crate) fn codex_rollout_matches_session_id(filename: &str, raw_session_id: &str) -> bool {
+    let Some(stem) = filename
+        .strip_suffix(".jsonl.zst")
+        .or_else(|| filename.strip_suffix(".jsonl"))
+    else {
+        return false;
+    };
+    let base = stem.strip_suffix("_continuation").unwrap_or(stem);
+    base == raw_session_id || base.ends_with(&format!("-{raw_session_id}"))
+}
+
 pub(crate) fn collect_provider_transcripts(
     root: &Path,
     session_id: &str,
@@ -110,7 +121,7 @@ pub(crate) fn collect_provider_transcripts(
             let parent_matches = path
                 .ancestors()
                 .any(|part| part.file_name().and_then(|value| value.to_str()) == Some(session_id));
-            if name.contains(session_id) || parent_matches {
+            if codex_rollout_matches_session_id(name, session_id) || parent_matches {
                 results.push(path);
                 continue;
             }
@@ -163,6 +174,9 @@ pub fn find_claude_workspace_transcript(
     workspace: &Path,
     session_id: &str,
 ) -> Option<PathBuf> {
+    if !crate::collectors::validate_safe_session_id(session_id) {
+        return None;
+    }
     let sanitized = sanitize_claude_project_dir(workspace);
     let direct = home
         .join(".claude")

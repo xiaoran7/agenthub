@@ -108,15 +108,28 @@ pub(crate) fn remote_ready_payload<T: NativeTransport>(
     discovery: Option<&Value>,
     device_name: &crate::device_name::DeviceNameSource,
 ) -> Value {
-    let mut workspaces = durable
-        .host
-        .workspaces()
-        .iter()
-        .map(|path| crate::privacy::workspace_id_for_path(&path.to_string_lossy()))
-        .collect::<Vec<_>>();
-    for key in durable.host.discovered_workspaces().keys() {
-        if key.starts_with("ws-") && !workspaces.contains(key) {
-            workspaces.push(key.to_owned());
+    let mut workspace_labels = std::collections::BTreeMap::<String, String>::new();
+    let mut workspaces = Vec::new();
+    for path in durable.host.workspaces() {
+        let raw = path.to_string_lossy();
+        let ws_id = crate::privacy::workspace_id_for_path(&raw);
+        let display = crate::privacy::workspace_display_path(&raw);
+        if !display.is_empty() {
+            workspace_labels.insert(ws_id.clone(), display);
+        }
+        if !workspaces.contains(&ws_id) {
+            workspaces.push(ws_id);
+        }
+    }
+    for (key, path) in durable.host.discovered_workspaces() {
+        if key.starts_with("ws-") {
+            let display = crate::privacy::workspace_display_path(&path.to_string_lossy());
+            if !display.is_empty() {
+                workspace_labels.entry(key.to_owned()).or_insert(display);
+            }
+            if !workspaces.contains(key) {
+                workspaces.push(key.to_owned());
+            }
         }
     }
     let sessions = durable
@@ -143,6 +156,7 @@ pub(crate) fn remote_ready_payload<T: NativeTransport>(
         "host_generation": durable.host.generation(),
         "device_name": device_name.resolve(),
         "workspaces": workspaces,
+        "workspace_labels": workspace_labels,
         "sessions": sessions,
         "models": models.cloned(),
         "discovery": discovery.cloned(),
@@ -273,6 +287,7 @@ pub fn run_with_local_control(
     let mut active = None;
     let mut offered = 0;
     let mut idle_ticks: u32 = 0;
+    let mut pending_net: Vec<NetworkEvent> = Vec::new();
     let (plugin_tx, plugin_rx) = mpsc::channel::<PluginCommandTaskResult>();
     let mut published_plugin_gen = crate::plugins::state_generation();
     while !control.stopped.load(Ordering::Acquire) {
@@ -405,6 +420,7 @@ pub fn run_with_local_control(
                                 remote_generation.fetch_add(1, Ordering::SeqCst) + 1;
                             control.connected.store(false, Ordering::Release);
                             active = None;
+                            offered = 0;
                             let Some(validated) = validated else {
                                 current_server = None;
                                 let _ = durable.journal.unbind_server();
@@ -414,6 +430,7 @@ pub fn run_with_local_control(
                                 remote_identity.device_id(),
                                 &validated,
                             )?;
+                            command_seq.store(0, Ordering::Release);
                             refresh_requested = true;
                             let ready_payload = remote_ready_payload(
                                 &durable,
@@ -463,7 +480,10 @@ pub fn run_with_local_control(
             }
         }
         // Bound network work each tick and coalesce monotonic ACKs before hitting SQLite.
-        let net_batch = coalesce_network_events(events.try_iter().take(128).collect());
+        let mut raw_net = std::mem::take(&mut pending_net);
+        let remaining = 128usize.saturating_sub(raw_net.len());
+        raw_net.extend(events.try_iter().take(remaining));
+        let net_batch = coalesce_network_events(raw_net);
         let had_net = !net_batch.is_empty();
         for event in net_batch {
             handle_network_event_inner(
@@ -587,28 +607,31 @@ pub fn run_with_local_control(
         }
         let mut sent_any = false;
         if let Some(epoch) = active {
-            let pending = durable.journal.pending(offered, 32)?;
-            if let Some(&(last_seq, _)) = pending.last() {
-                durable.journal.mark_sent_through(last_seq)?;
-                for (seq, payload) in pending {
-                    if send_tx
-                        .try_send(NetworkSend::Data(epoch, seq, payload))
-                        .is_err()
-                    {
-                        break;
-                    }
-                    offered = seq;
-                    sent_any = true;
+            let pending = durable.journal.pending(offered, OUTBOUND_DRAIN_LIMIT)?;
+            for (seq, payload) in pending {
+                if send_tx
+                    .try_send(NetworkSend::Data(epoch, seq, payload))
+                    .is_err()
+                {
+                    break;
                 }
+                offered = seq;
+                sent_any = true;
             }
         }
-        if !polled_events.is_empty() || had_net || sent_any || sent_plugin_any {
+        let pause = if !polled_events.is_empty() || had_net || sent_any || sent_plugin_any {
             idle_ticks = 0;
-            thread::sleep(Duration::from_millis(10));
+            Duration::from_millis(2)
         } else {
             idle_ticks = idle_ticks.saturating_add(1);
-            let pause_ms = if idle_ticks < 5 { 20 } else { 50 };
-            thread::sleep(Duration::from_millis(pause_ms));
+            if idle_ticks < 8 {
+                Duration::from_millis(12)
+            } else {
+                Duration::from_millis(25)
+            }
+        };
+        if let Ok(first) = events.recv_timeout(pause) {
+            pending_net.push(first);
         }
     }
     Ok(())

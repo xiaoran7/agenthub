@@ -72,14 +72,14 @@ data class RemoteBinding(
     companion object {
         fun parse(json: JSONObject): RemoteBinding =
             RemoteBinding(
-                hubSessionId = json.optString("hub_session_id"),
-                providerSessionId = json.optString("provider_session_id"),
-                workspacePath = json.optString("workspace_path"),
-                hostGeneration = json.optString("host_generation"),
+                hubSessionId = json.optStringOrEmpty("hub_session_id"),
+                providerSessionId = json.optStringOrEmpty("provider_session_id"),
+                workspacePath = json.optStringOrEmpty("workspace_path"),
+                hostGeneration = json.optStringOrEmpty("host_generation"),
                 controlConnected = json.optBoolean("control_connected"),
-                executionState = ExecutionState.fromWire(json.optString("execution_state")),
+                executionState = ExecutionState.fromWire(json.optNullableString("execution_state").orEmpty()),
                 currentTurnId = json.optNullableString("current_turn_id"),
-                title = json.optString("title"),
+                title = json.optNullableString("title").orEmpty(),
             )
     }
 }
@@ -88,6 +88,7 @@ data class RemoteSessionRow(
     val runnerId: String,
     val online: Boolean,
     val binding: RemoteBinding,
+    val provider: String? = null,
 ) {
     val key: String
         get() = "$runnerId/${binding.hubSessionId}"
@@ -95,13 +96,14 @@ data class RemoteSessionRow(
     companion object {
         fun parse(json: JSONObject): RemoteSessionRow? {
             val binding = json.optJSONObject("binding") ?: return null
-            val runnerId = json.optString("runner_id")
+            val runnerId = json.optNullableString("runner_id").orEmpty()
             if (runnerId.isBlank()) return null
-            if (binding.optString("hub_session_id").isBlank()) return null
+            if (binding.optNullableString("hub_session_id").isNullOrBlank()) return null
             return RemoteSessionRow(
                 runnerId = runnerId,
                 online = json.optBoolean("online"),
                 binding = RemoteBinding.parse(binding),
+                provider = json.optNullableString("provider"),
             )
         }
     }
@@ -170,10 +172,10 @@ data class PendingApproval(
     companion object {
         fun parse(json: JSONObject): PendingApproval =
             PendingApproval(
-                approvalId = json.optString("approval_id"),
-                hubSessionId = json.optString("hub_session_id"),
-                hostGeneration = json.optString("host_generation"),
-                turnId = json.optString("turn_id"),
+                approvalId = json.optStringOrEmpty("approval_id"),
+                hubSessionId = json.optStringOrEmpty("hub_session_id"),
+                hostGeneration = json.optStringOrEmpty("host_generation"),
+                turnId = json.optStringOrEmpty("turn_id"),
                 canApprove = json.optBoolean("can_approve", true),
                 canDecline = json.optBoolean("can_decline", true),
                 toolName = json.optNullableString("tool_name"),
@@ -205,15 +207,15 @@ data class PendingQuestion(
     companion object {
         fun parse(json: JSONObject): PendingQuestion =
             PendingQuestion(
-                questionId = json.optString("question_id"),
-                hubSessionId = json.optString("hub_session_id"),
-                hostGeneration = json.optString("host_generation"),
-                turnId = json.optString("turn_id"),
-                prompt = json.optString("prompt"),
+                questionId = json.optStringOrEmpty("question_id"),
+                hubSessionId = json.optStringOrEmpty("hub_session_id"),
+                hostGeneration = json.optStringOrEmpty("host_generation"),
+                turnId = json.optStringOrEmpty("turn_id"),
+                prompt = json.optStringOrEmpty("prompt"),
                 header = json.optNullableString("header"),
                 options = json.optJSONArray("options").objects().map { option ->
                     QuestionOption(
-                        label = option.optString("label"),
+                        label = option.optStringOrEmpty("label"),
                         description = option.optNullableString("description"),
                         preview = option.optNullableString("preview"),
                     )
@@ -230,6 +232,7 @@ data class HostHello(
     val provider: String?,
     val workspaces: List<String>,
     val candidates: List<DiscoveryCandidate>,
+    val workspaceLabels: Map<String, String> = emptyMap(),
     val models: ModelCatalog = ModelCatalog.Empty,
     val pendingApprovals: Int,
     val pendingQuestions: Int,
@@ -238,7 +241,17 @@ data class HostHello(
     val plugins: List<AgentPlugin> = emptyList(),
 ) {
     companion object {
-        val Empty = HostHello("", null, null, emptyList(), emptyList(), ModelCatalog.Empty, 0, 0)
+        val Empty = HostHello(
+            hostGeneration = "",
+            deviceName = null,
+            provider = null,
+            workspaces = emptyList(),
+            candidates = emptyList(),
+            workspaceLabels = emptyMap(),
+            models = ModelCatalog.Empty,
+            pendingApprovals = 0,
+            pendingQuestions = 0,
+        )
 
         fun parse(json: JSONObject?): HostHello? {
             if (json == null) return null
@@ -249,13 +262,14 @@ data class HostHello(
             val questionsList = questionsArr.objects().map(PendingQuestion::parse)
             val pluginsList = json.optJSONArray("plugins").objects().mapNotNull(AgentPlugin::parse)
             return HostHello(
-                hostGeneration = json.optString("host_generation"),
+                hostGeneration = json.optStringOrEmpty("host_generation"),
                 deviceName = json.optNullableString("device_name")?.trim()?.takeIf { it.isNotEmpty() },
                 provider = json.optNullableString("provider"),
                 workspaces = json.optJSONArray("workspaces")?.strings().orEmpty(),
+                workspaceLabels = json.optStringMap("workspace_labels"),
                 candidates = discovery?.optJSONArray("candidates").objects().mapNotNull { candidate ->
-                    val providerSessionId = candidate.optString("provider_session_id")
-                    val workspace = candidate.optString("workspace_path")
+                    val providerSessionId = candidate.optStringOrEmpty("provider_session_id")
+                    val workspace = candidate.optStringOrEmpty("workspace_path")
                     if (providerSessionId.isBlank() || workspace.isBlank()) return@mapNotNull null
                     DiscoveryCandidate(
                         providerSessionId = providerSessionId,
@@ -298,6 +312,9 @@ fun mergeHostHello(fresh: HostHello?, cachedFull: HostHello?): HostHello? {
     if (fresh == null) return cachedFull
     if (cachedFull == null) return fresh
     return fresh.copy(
+        workspaceLabels =
+            if (fresh.workspaceLabels.isNotEmpty()) fresh.workspaceLabels
+            else cachedFull.workspaceLabels,
         models = if (!fresh.models.isEmpty) fresh.models else cachedFull.models,
         candidates = if (fresh.candidates.isNotEmpty()) fresh.candidates else cachedFull.candidates,
         plugins = if (fresh.plugins.isNotEmpty()) fresh.plugins else cachedFull.plugins,
@@ -305,24 +322,25 @@ fun mergeHostHello(fresh: HostHello?, cachedFull: HostHello?): HostHello? {
 }
 
 data class PluginCapabilities(
-    val discover: Boolean = false,
-    val launch: Boolean = false,
-    val resume: Boolean = false,
-    val models: Boolean = false,
-    val history: Boolean = false,
+    val discover: Boolean = true,
+    val launch: Boolean = true,
+    val resume: Boolean = true,
+    val models: Boolean = true,
+    val history: Boolean = true,
     val approvals: Boolean = false,
 ) {
     companion object {
-        val Empty = PluginCapabilities()
+        val Default = PluginCapabilities()
+        val Empty = Default
 
         fun parse(json: JSONObject?): PluginCapabilities {
-            if (json == null) return Empty
+            if (json == null) return Default
             return PluginCapabilities(
-                discover = json.optBoolean("discover", false),
-                launch = json.optBoolean("launch", false),
-                resume = json.optBoolean("resume", false),
-                models = json.optBoolean("models", false),
-                history = json.optBoolean("history", false),
+                discover = json.optBoolean("discover", true),
+                launch = json.optBoolean("launch", true),
+                resume = json.optBoolean("resume", true),
+                models = json.optBoolean("models", true),
+                history = json.optBoolean("history", true),
                 approvals = json.optBoolean("approvals", false),
             )
         }
@@ -356,7 +374,7 @@ data class AgentPlugin(
 
     companion object {
         fun parse(json: JSONObject): AgentPlugin? {
-            val id = json.optString("id").trim()
+            val id = json.optNullableString("id")?.trim().orEmpty()
             if (id.isEmpty()) return null
             val runtimeStatus =
                 json.optNullableString("runtimeStatus")
@@ -366,11 +384,11 @@ data class AgentPlugin(
                 else runtimeStatus != "not_installed"
             return AgentPlugin(
                 id = id,
-                name = json.optString("name").ifBlank { id },
+                name = json.optNullableString("name") ?: id,
                 displayName = json.optNullableString("display_name") ?: json.optNullableString("displayName"),
-                version = json.optString("version").ifBlank { "1.0.0" },
-                description = json.optString("description"),
-                category = json.optString("category").ifBlank { "agent" },
+                version = json.optNullableString("version") ?: "1.0.0",
+                description = json.optNullableString("description").orEmpty(),
+                category = json.optNullableString("category") ?: "agent",
                 enabled = json.optBoolean("enabled", false),
                 installed = installed,
                 installedVersion = json.optNullableString("installed_version") ?: json.optNullableString("installedVersion"),
@@ -397,7 +415,7 @@ data class RunnerPluginSnapshot(
 ) {
     companion object {
         fun parse(json: JSONObject): RunnerPluginSnapshot? {
-            val runnerId = json.optString("runner").trim().ifEmpty { json.optString("runner_id").trim() }
+            val runnerId = json.optStringOrEmpty("runner").trim().ifEmpty { json.optStringOrEmpty("runner_id").trim() }
             if (runnerId.isEmpty()) return null
             return RunnerPluginSnapshot(
                 runnerId = runnerId,
@@ -432,7 +450,7 @@ data class DeviceBinding(
 ) {
     companion object {
         fun parse(json: JSONObject): DeviceBinding? {
-            val code = json.optString("binding_code").trim()
+            val code = json.optStringOrEmpty("binding_code").trim()
             if (code.isEmpty()) return null
             return DeviceBinding(
                 bindingCode = code,
@@ -455,13 +473,16 @@ data class HostDevice(
     val workspaces: List<String>
         get() = hello?.workspaces.orEmpty()
 
+    val workspaceLabels: Map<String, String>
+        get() = hello?.workspaceLabels.orEmpty()
+
     /** Engines' model lists this Host advertised; empty for an older Runner. */
     val models: ModelCatalog
         get() = hello?.models ?: ModelCatalog.Empty
 
     companion object {
         fun parse(json: JSONObject): HostDevice? {
-            val runnerId = json.optString("runner_id")
+            val runnerId = json.optStringOrEmpty("runner_id")
             if (runnerId.isBlank()) return null
             return HostDevice(
                 runnerId = runnerId,
@@ -533,14 +554,14 @@ data class RemoteEvent(
     val payload: JSONObject,
 ) {
     val payloadType: String
-        get() = payload.optString("type")
+        get() = payload.optStringOrEmpty("type")
 
     /** The `event` object of a `type: "event"` frame. */
     val event: JSONObject?
         get() = if (payloadType == "event") payload.optJSONObject("event") else null
 
     val eventKind: String
-        get() = event?.optString("kind").orEmpty()
+        get() = event?.optStringOrEmpty("kind").orEmpty()
 
     val receipt: JSONObject?
         get() = if (payloadType == "receipt") payload.optJSONObject("receipt") else null
@@ -549,7 +570,7 @@ data class RemoteEvent(
         fun parse(json: JSONObject): RemoteEvent =
             RemoteEvent(
                 cursor = json.optLong("cursor", 0),
-                runnerId = json.optString("runner_id"),
+                runnerId = json.optStringOrEmpty("runner_id"),
                 payload = json.optJSONObject("payload") ?: JSONObject(),
             )
     }
@@ -570,10 +591,10 @@ class RemoteCommandRecord(
     private val fingerprint = command.toString() + "\u0000" + (receipt?.toString() ?: "")
 
     val action: String
-        get() = command.optJSONObject("command")?.optString("action").orEmpty()
+        get() = command.optJSONObject("command")?.optStringOrEmpty("action").orEmpty()
 
     val hubSessionId: String
-        get() = command.optString("hub_session_id")
+        get() = command.optStringOrEmpty("hub_session_id")
 
     override fun equals(other: Any?): Boolean =
         this === other || (other is RemoteCommandRecord && other.fingerprint == fingerprint)
@@ -655,11 +676,11 @@ data class AccountView(
             val subscription = json.optJSONObject("workspace_subscription")
                 ?: json.optJSONObject("subscription")
             return AccountView(
-                userId = user.optString("user_id"),
-                email = user.optString("email"),
-                displayName = user.optString("display_name").ifBlank { user.optString("email") },
-                workspaceName = workspace?.optString("name")?.takeIf { it.isNotBlank() },
-                plan = subscription?.optString("plan")?.takeIf { it.isNotBlank() },
+                userId = user.optNullableString("user_id").orEmpty(),
+                email = user.optNullableString("email").orEmpty(),
+                displayName = user.optNullableString("display_name") ?: user.optNullableString("email").orEmpty(),
+                workspaceName = workspace?.optNullableString("name"),
+                plan = subscription?.optNullableString("plan"),
             )
         }
     }
@@ -709,7 +730,8 @@ data class AppConfig(
                 ?: return "Gateway 地址格式无效"
         val host = uri.host?.lowercase() ?: return "Gateway 地址缺少主机名"
         val loopback = isLoopbackUriHost(host)
-        if (uri.scheme != "https" && !(uri.scheme == "http" && loopback)) {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "https" && !(scheme == "http" && loopback)) {
             return "远程 Gateway 必须使用 HTTPS"
         }
         if (uri.userInfo != null || uri.query != null || uri.fragment != null) {
@@ -759,23 +781,4 @@ data class AppConfig(
     }
 }
 
-// -------------------------------------------------------------------------
-// JSON helpers shared by every parser in this package
-// -------------------------------------------------------------------------
-
-internal fun JSONArray?.objects(): List<JSONObject> =
-    if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
-
-internal fun JSONArray?.strings(): List<String> =
-    if (this == null) emptyList() else (0 until length()).map { optString(it) }
-
-internal fun JSONObject.optNullableString(key: String): String? {
-    if (isNull(key)) return null
-    return optString(key).takeIf { it.isNotBlank() }
-}
-
-internal fun JSONObject.optLongOrNull(key: String): Long? {
-    if (isNull(key) || !has(key)) return null
-    val value = optLong(key, Long.MIN_VALUE)
-    return if (value == Long.MIN_VALUE) null else value
-}
+// JSON helpers live in JsonHelpers.kt

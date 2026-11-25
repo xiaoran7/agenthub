@@ -293,7 +293,7 @@ export function followContentStream(options: {
   current.listeners.add(wrapped);
   current.references += 1;
   return () => {
-    current.listeners.delete(wrapped);
+    if (!current.listeners.delete(wrapped)) return;
     current.references -= 1;
     if (current.references > 0) return;
     current.close();

@@ -3,16 +3,61 @@ use std::{
     fs,
     os::unix::{
         fs::{FileTypeExt, PermissionsExt},
-        net::UnixListener,
+        net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    sync::atomic::AtomicUsize,
 };
+
+const MAX_ACTIVE_IPC_CONNECTIONS: usize = 64;
+const IPC_SOCKET_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct SocketGuard(PathBuf);
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
+}
+
+struct ConnectionPermit(Arc<AtomicUsize>);
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn peer_matches_euid(stream: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+            &mut len,
+        )
+    };
+    if rc != 0 || (len as usize) < std::mem::size_of::<libc::ucred>() {
+        return false;
+    }
+    cred.uid == unsafe { libc::geteuid() }
+}
+
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+fn peer_matches_euid(stream: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let mut euid: libc::uid_t = libc::uid_t::MAX;
+    let mut egid: libc::gid_t = libc::gid_t::MAX;
+    let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
+    rc == 0 && euid == unsafe { libc::geteuid() }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
+fn peer_matches_euid(_stream: &UnixStream) -> bool {
+    false
 }
 
 pub(crate) fn serve(
@@ -23,7 +68,23 @@ pub(crate) fn serve(
 ) -> Result<()> {
     let path = Path::new(endpoint);
     if path.as_os_str().len() > 100 {
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(Err("invalid_ipc_endpoint".into()));
+        }
         bail!("invalid_ipc_endpoint");
+    }
+    let uid = unsafe { libc::geteuid() };
+    let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(Err("invalid_ipc_endpoint".into()));
+        }
+        bail!("invalid_ipc_endpoint");
+    };
+    if !super::super::types::ensure_private_unix_dir(parent, uid) {
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(Err("ipc_socket_dir_insecure".into()));
+        }
+        bail!("ipc_socket_dir_insecure");
     }
     let listener = match UnixListener::bind(path) {
         Ok(listener) => listener,
@@ -62,12 +123,26 @@ pub(crate) fn serve(
     if let Some(ready) = ready.take() {
         let _ = ready.send(Ok(()));
     }
+    let active_connections = Arc::new(AtomicUsize::new(0));
     while !stopped.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
+                if !peer_matches_euid(&stream) {
+                    continue;
+                }
+                let prev = active_connections.fetch_add(1, Ordering::AcqRel);
+                if prev >= MAX_ACTIVE_IPC_CONNECTIONS {
+                    active_connections.fetch_sub(1, Ordering::AcqRel);
+                    continue;
+                }
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(IPC_SOCKET_IO_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(IPC_SOCKET_IO_TIMEOUT));
+                let permit = ConnectionPermit(active_connections.clone());
                 let worker_handler = handler.clone();
                 let worker_stopped = stopped.clone();
                 thread::spawn(move || {
+                    let _permit = permit;
                     let _ = serve_connection(stream, worker_handler, worker_stopped);
                 });
             }

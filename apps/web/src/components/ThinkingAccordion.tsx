@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { copyTextToClipboard } from "../lib/clipboard";
 
 /**
  * Claude Design System (CDS) - ThinkingAccordion
@@ -67,6 +68,16 @@ export function ThinkingAccordion({
 }: ThinkingAccordionProps) {
   const [userExpanded, setUserExpanded] = useState(false);
   const [didCopy, setDidCopy] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   // 核心互斥物理：思考进行中必定展开
   const isOpen = isThinking || userExpanded;
@@ -82,9 +93,14 @@ export function ThinkingAccordion({
       .split("\n")
       .map((line) => `> ${line}`)
       .join("\n");
-    void navigator.clipboard.writeText(quoted);
-    setDidCopy(true);
-    setTimeout(() => setDidCopy(false), 2000);
+    void copyTextToClipboard(quoted).then((ok) => {
+      if (!ok || !mountedRef.current) return;
+      setDidCopy(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setDidCopy(false);
+      }, 2000);
+    });
   };
 
   if (!thoughtText.trim() && !isThinking) return null;

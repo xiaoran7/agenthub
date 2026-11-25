@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ActivityStatus, SyncEvent } from "@agent-pulse/contracts";
-import type { SessionStatusChange, StoredSession } from "./store.js";
+import type { SessionStatusChange, StoredSession } from "./store-types.js";
 
 const CONFIDENCE_RANK: Record<SyncEvent["confidence"], number> = {
   unknown: 0,
@@ -78,6 +78,7 @@ export const SQLITE_GATEWAY_SCHEMA = `
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     endpoint TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
+    subscriber_user_id TEXT,
     payload TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_push_owner ON push_subscriptions(owner_id);
@@ -121,7 +122,7 @@ export const SQLITE_ACCOUNT_SCHEMA = `
   PRAGMA synchronous=NORMAL;
   CREATE TABLE IF NOT EXISTS agent_pulse_users (
     user_id TEXT PRIMARY KEY,
-    email TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     display_name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
@@ -129,7 +130,7 @@ export const SQLITE_ACCOUNT_SCHEMA = `
     avatar_data_url TEXT,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS idx_users_email ON agent_pulse_users(email);
+  CREATE INDEX IF NOT EXISTS idx_users_email ON agent_pulse_users(email COLLATE NOCASE);
   CREATE TABLE IF NOT EXISTS agent_pulse_web_sessions (
     digest TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,

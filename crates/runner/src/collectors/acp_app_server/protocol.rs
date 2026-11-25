@@ -1,5 +1,7 @@
 use super::*;
 
+pub(crate) const MAX_PENDING_PERMISSIONS: usize = 256;
+
 pub fn discover_acp_binary() -> Option<std::path::PathBuf> {
     if let Some(path) = std::env::var_os("ACP_SERVER_PATH").filter(|v| !v.is_empty()) {
         let candidate = std::path::PathBuf::from(path);
@@ -61,7 +63,7 @@ fn resolve_active_turn_id(active_turns: &HashMap<String, String>, session_id: &s
 pub fn normalize_acp_message(
     msg: Value,
     pending_prompts: &mut HashMap<u64, PendingPromptInfo>,
-    pending_permissions: &mut HashMap<String, Vec<AcpPermissionOption>>,
+    pending_permissions: &mut HashMap<String, PendingPermissionRequest>,
     active_turns: &mut HashMap<String, String>,
 ) -> Vec<Value> {
     let mut normalized = Vec::new();
@@ -122,6 +124,9 @@ pub fn normalize_acp_message(
                     }
                 }));
                 active_turns.remove(&prompt_info.session_id);
+                pending_permissions.retain(|_, req| {
+                    req.session_id.is_empty() || req.session_id != prompt_info.session_id
+                });
                 return normalized;
             }
         }
@@ -280,8 +285,8 @@ pub fn normalize_acp_message(
 
                 let is_file = matches!(kind, "edit" | "write" | "fileChange");
 
+                let mut opts = Vec::new();
                 if let Some(options_array) = params.get("options").and_then(Value::as_array) {
-                    let mut opts = Vec::new();
                     for opt in options_array {
                         if let (Some(opt_id), Some(opt_kind)) = (
                             opt.get("optionId").and_then(Value::as_str),
@@ -293,8 +298,27 @@ pub fn normalize_acp_message(
                             });
                         }
                     }
-                    pending_permissions.insert(req_id_str.clone(), opts);
                 }
+                while pending_permissions.len() >= MAX_PENDING_PERMISSIONS {
+                    if let Some(oldest_key) = pending_permissions
+                        .iter()
+                        .min_by_key(|(_, req)| req.created_at)
+                        .map(|(k, _)| k.clone())
+                    {
+                        pending_permissions.remove(&oldest_key);
+                    } else {
+                        break;
+                    }
+                }
+                pending_permissions.insert(
+                    req_id_str.clone(),
+                    PendingPermissionRequest {
+                        raw_id: req_id_raw.clone(),
+                        options: opts,
+                        session_id: session_id.to_owned(),
+                        created_at: Instant::now(),
+                    },
+                );
 
                 if is_file {
                     let file_path = raw_input
@@ -307,27 +331,33 @@ pub fn normalize_acp_message(
                         raw_input.get("old_string").and_then(Value::as_str),
                         raw_input.get("new_string").and_then(Value::as_str),
                     ) {
-                        let mut payload = json!({
-                            "old_string": crate::privacy::redact_paths_inside_text(old_str),
-                            "new_string": crate::privacy::redact_paths_inside_text(new_str),
-                        })
-                        .to_string();
-                        crate::collectors::truncate_utf8_bytes(&mut payload, 65536);
-                        Some(payload)
+                        let mut old_clean = crate::privacy::redact_paths_inside_text(old_str);
+                        let mut new_clean = crate::privacy::redact_paths_inside_text(new_str);
+                        crate::collectors::truncate_utf8_bytes(&mut old_clean, 30_000);
+                        crate::collectors::truncate_utf8_bytes(&mut new_clean, 30_000);
+                        Some(
+                            json!({
+                                "old_string": old_clean,
+                                "new_string": new_clean,
+                            })
+                            .to_string(),
+                        )
                     } else if let Some(content) = raw_input.get("content").and_then(Value::as_str) {
-                        let mut payload = json!({
-                            "new_string": crate::privacy::redact_paths_inside_text(content),
-                        })
-                        .to_string();
-                        crate::collectors::truncate_utf8_bytes(&mut payload, 65536);
-                        Some(payload)
+                        let mut new_clean = crate::privacy::redact_paths_inside_text(content);
+                        crate::collectors::truncate_utf8_bytes(&mut new_clean, 60_000);
+                        Some(
+                            json!({
+                                "new_string": new_clean,
+                            })
+                            .to_string(),
+                        )
                     } else if let Some(raw_diff) = raw_input
                         .get("diff")
                         .or_else(|| raw_input.get("patch"))
                         .and_then(Value::as_str)
                     {
                         let mut sanitized = crate::privacy::redact_paths_inside_text(raw_diff);
-                        crate::collectors::truncate_utf8_bytes(&mut sanitized, 65536);
+                        crate::collectors::truncate_utf8_bytes(&mut sanitized, 65_536);
                         Some(sanitized)
                     } else {
                         None

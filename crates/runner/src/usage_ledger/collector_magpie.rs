@@ -29,7 +29,11 @@ pub(crate) fn update_magpie_gateway_calls(home: &Path, routed: &HashMap<String, 
         }
     }
 
-    if paths.is_empty() {
+    if paths.is_empty()
+        && ledger_cache()
+            .read()
+            .is_ok_and(|g| g.magpie_gateway.is_empty())
+    {
         return false;
     }
 

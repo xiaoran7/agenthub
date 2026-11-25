@@ -143,7 +143,14 @@ pub fn run(config: DaemonConfig) -> Result<()> {
     // pass finds a change, so nothing has to poll the daemon to make it look.
     // It shares the IPC stop flag: both are cleared together when the
     // remote loop returns.
-    crate::live::start(ipc_stopped.clone());
+    let stop_control = control.clone();
+    crate::live::start_with_on_stop(
+        ipc_stopped.clone(),
+        crate::remote_host::wake_scan,
+        move || {
+            stop_control.stopped.store(true, Ordering::Release);
+        },
+    );
     let ipc_control = ipc_stopped.clone();
     let ipc_handler: Arc<dyn DaemonRequestHandler> = Arc::new(LocalHandler {
         client,

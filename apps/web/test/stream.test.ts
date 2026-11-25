@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   SseDecoder,
   backoffMs,
+  followContentStream,
   streamBatchAffectsSession,
   streamBatchAffectsSnapshot,
 } from "../src/lib/stream";
@@ -176,4 +177,48 @@ test("streamBatchAffectsSession isolates open session polling from other runners
     streamBatchAffectsSession([runnerBroadcast], "dev_target", "hub-open"),
     true,
   );
+});
+
+test("followContentStream ignores duplicate unsubscribe calls without tearing down sibling listeners", (t) => {
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  let abortedCount = 0;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+    fetchCount += 1;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          abortedCount += 1;
+          reject(new DOMException("Aborted", "AbortError"));
+        },
+        { once: true },
+      );
+    });
+  }) as typeof fetch;
+
+  const base = "http://127.0.0.1:49999/double-unsub-test";
+  const unsub1 = followContentStream({
+    gatewayBase: base,
+    event: "remote",
+    onChange: () => {},
+  });
+  const unsub2 = followContentStream({
+    gatewayBase: base,
+    event: "plugins",
+    onChange: () => {},
+  });
+
+  assert.equal(fetchCount, 1);
+  // Calling unsub1 twice must NOT decrement references twice and abort unsub2's stream.
+  unsub1();
+  unsub1();
+  assert.equal(abortedCount, 0);
+
+  unsub2();
+  assert.equal(abortedCount, 1);
 });

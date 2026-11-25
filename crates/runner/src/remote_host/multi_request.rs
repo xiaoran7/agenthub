@@ -6,18 +6,36 @@ impl MultiProviderTransport {
         method: &str,
         params: Value,
     ) -> Result<Value, NativeError> {
+        let req_thread_id = params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         if let Some(ref mut codex) = self.codex {
-            codex.request(method, params).map_err(|error| match error {
-                crate::collectors::CollectorError::Protocol { ref message, .. } => {
+            match codex.request(method, params) {
+                Ok(resp) => {
+                    if method == "turn/start"
+                        && let (Some(tid), Some(turn_id)) = (
+                            req_thread_id,
+                            resp.pointer("/turn/id").and_then(Value::as_str),
+                        )
+                    {
+                        self.codex_active_turns.insert(tid, turn_id.to_string());
+                    }
+                    Ok(resp)
+                }
+                Err(crate::collectors::CollectorError::Protocol { ref message, .. }) => {
                     if method == "thread/resume" && message.contains("already has an active writer")
                     {
-                        NativeError::rejected("native_writer_busy")
+                        Err(NativeError::rejected("native_writer_busy"))
                     } else {
-                        NativeError::rejected("provider_rejected")
+                        Err(NativeError::rejected("provider_rejected"))
                     }
                 }
-                _ => NativeError::uncertain("provider_transport_lost"),
-            })
+                Err(_) => {
+                    self.handle_codex_transport_loss();
+                    Err(NativeError::rejected("codex_provider_lost"))
+                }
+            }
         } else {
             Err(NativeError::rejected("provider_not_available"))
         }
@@ -175,9 +193,9 @@ impl MultiProviderTransport {
                 let mut server = AcpAppServer::start(&binary_path, &[], Duration::from_secs(20))
                     .map_err(|e| NativeError::rejected(format!("acp_start_failed: {}", e)))?;
 
-                let native_id = server.session_new(&cwd_path).map_err(|e| {
-                    NativeError::uncertain(format!("acp_session_new_failed: {}", e))
-                })?;
+                let native_id = server
+                    .session_new(&cwd_path)
+                    .map_err(|e| NativeError::rejected(format!("acp_session_new_failed: {}", e)))?;
 
                 let session_id = format!("acp_{}", native_id);
                 self.acp_cached_cwds.insert(session_id.clone(), cwd_path);
@@ -196,14 +214,17 @@ impl MultiProviderTransport {
                     .get("cursor")
                     .is_none_or(|c| c.is_null() || c.as_str().is_none_or(|s| s.is_empty()));
                 let mut response = if let Some(ref mut codex) = self.codex {
-                    codex
-                        .request("thread/list", params)
-                        .map_err(|error| match error {
-                            crate::collectors::CollectorError::Protocol { .. } => {
-                                NativeError::rejected("provider_rejected")
-                            }
-                            _ => NativeError::uncertain("provider_transport_lost"),
-                        })?
+                    match codex.request("thread/list", params) {
+                        Ok(resp) => resp,
+                        Err(crate::collectors::CollectorError::Protocol { .. }) => {
+                            return Err(NativeError::rejected("provider_rejected"));
+                        }
+                        Err(_) => {
+                            self.handle_codex_transport_loss();
+                            crate::collectors::collect_codex_local_threads(5000)
+                                .unwrap_or_else(|_| json!({"data": [], "nextCursor": null}))
+                        }
+                    }
                 } else {
                     // A missing app-server must not hide locally discoverable Codex
                     // sessions. Metadata-only candidates cannot be resumed here.
@@ -261,12 +282,16 @@ impl MultiProviderTransport {
                     return Ok(cached.clone());
                 }
                 if let Some(ref mut codex) = self.codex {
-                    let mut resp = codex.request(method, params).map_err(|error| match error {
-                        crate::collectors::CollectorError::Protocol { .. } => {
-                            NativeError::rejected("provider_rejected")
+                    let mut resp = match codex.request(method, params) {
+                        Ok(resp) => resp,
+                        Err(crate::collectors::CollectorError::Protocol { .. }) => {
+                            return Err(NativeError::rejected("provider_rejected"));
                         }
-                        _ => NativeError::uncertain("provider_transport_lost"),
-                    })?;
+                        Err(_) => {
+                            self.handle_codex_transport_loss();
+                            return Err(NativeError::rejected("codex_provider_lost"));
+                        }
+                    };
                     crate::model_catalog::enrich_codex_live_models(&mut resp);
                     self.codex_models_cache = Some((Instant::now(), resp.clone()));
                     Ok(resp)

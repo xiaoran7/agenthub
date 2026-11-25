@@ -1,0 +1,507 @@
+/* One disclosure grammar for both the single card and the group: a chevron
+   that rotates, so the row is obviously expandable. */
+.remote-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--remote-muted);
+  transition: transform 0.18s ease;
+}
+details[open] > summary > .remote-disclosure,
+details[open] > .remote-tool-summary > .remote-disclosure {
+  transform: rotate(90deg);
+}
+.remote-tool-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 1;
+}
+.remote-tool-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--cds-alpha-1, var(--remote-hover));
+  color: var(--cds-text-muted, var(--remote-muted));
+  transition: all 0.15s ease;
+}
+/* Each tool shape carries its own accent so a block of tool rows is scannable
+   by colour as well as by glyph. */
+.remote-tool[data-tool="command"] .remote-tool-glyph {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.12);
+}
+.remote-tool[data-tool="read"] .remote-tool-glyph {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+}
+.remote-tool[data-tool="search"] .remote-tool-glyph {
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  background: var(--cds-alpha-1, var(--remote-hover));
+}
+.remote-tool[data-tool="edit"] .remote-tool-glyph {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+}
+.remote-tool[data-tool="web"] .remote-tool-glyph {
+  color: var(--cds-clay, #d97757);
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.14));
+}
+.remote-tool-title {
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  color: var(--cds-text-primary, var(--remote-ink));
+}
+.remote-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--df-radius-pill, 999px);
+  font-weight: 550;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.remote-tool-status.running,
+.remote-tool.state-running .remote-tool-status {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+}
+.remote-tool-status.completed,
+.remote-tool.state-completed .remote-tool-status {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+[data-theme="dark"] .remote-tool-status.completed,
+:root[data-theme="dark"] .remote-tool-status.completed {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.remote-tool-status.failed,
+.remote-tool.state-failed .remote-tool-status {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+}
+.remote-tool.state-failed {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.remote-tool-pulse-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 10px;
+}
+.remote-tool-pulse-dots .pulse-dot {
+  width: 3.5px;
+  height: 3.5px;
+  border-radius: 50%;
+  background-color: currentColor;
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  animation: timeline-quiet-dot 1.25s infinite ease-in-out;
+}
+.remote-tool-pulse-dots .pulse-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.remote-tool-pulse-dots .pulse-dot:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.remote-tool-pulse-dots .pulse-dot:nth-child(3) {
+  animation-delay: 0.36s;
+}
+.remote-tool.running,
+.remote-tool.state-running {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: var(--cds-surface-2, var(--remote-surface));
+}
+.remote-tool.running .remote-tool-summary,
+.remote-tool.state-running .remote-tool-summary {
+  position: relative;
+  overflow: hidden;
+}
+.remote-tool.running .remote-tool-summary::after,
+.remote-tool.state-running .remote-tool-summary::after {
+  content: "";
+  position: absolute;
+  inset: auto auto 0 0;
+  width: 45%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--cds-clay, #d97757),
+    #3b82f6,
+    transparent
+  );
+  will-change: transform;
+  transform: translate3d(-100%, 0, 0);
+  animation: remote-tool-shimmer 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes remote-tool-shimmer {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(240%, 0, 0);
+  }
+}
+.remote-tool-content {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--cds-border, var(--remote-line));
+  background: var(--cds-surface-1, var(--remote-surface));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.remote-tool-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cds-text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.remote-card-mini-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.1));
+  background: var(--cds-surface-2, transparent);
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+.remote-card-mini-copy:hover {
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.05));
+  color: var(--cds-text-primary, var(--remote-ink));
+  border-color: var(--cds-border-strong, rgba(0, 0, 0, 0.2));
+}
+.remote-card-mini-copy.copied {
+  color: #16a34a;
+  border-color: rgba(22, 163, 74, 0.35);
+  background: rgba(22, 163, 74, 0.08);
+}
+/* The button's icon and label sit in a wrapper of their own, so the button's
+   `gap` never reaches them: space the pair here. */
+.remote-copy-badge,
+.remote-copy-action,
+.remote-copied-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.remote-copied-badge {
+  color: #16a34a;
+  font-weight: 600;
+}
+/* The command is the action being taken, monospaced;
+   Output is distinct and collapsible/scrollable */
+.remote-tool-cmd {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--cds-surface-0, #0d0e12);
+  border: 1px solid var(--cds-border, #1e222a);
+  border-radius: var(--radius-md, 6px);
+  color: #d97706;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+[data-theme="dark"] .remote-tool-cmd,
+:root[data-theme="dark"] .remote-tool-cmd {
+  color: #fbbf24;
+}
+.remote-tool-output {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--cds-surface-0, #0d0e12);
+  border: 1px solid var(--cds-border, #1e222a);
+  border-radius: var(--radius-md, 6px);
+  color: var(--cds-text-secondary, #b9bcc4);
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.remote-diff-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+.remote-diff-badge .diff-add {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs, 3px);
+}
+[data-theme="dark"] .remote-diff-badge .diff-add,
+:root[data-theme="dark"] .remote-diff-badge .diff-add {
+  color: #4ade80;
+}
+.remote-diff-badge .diff-del {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs, 3px);
+}
+[data-theme="dark"] .remote-diff-badge .diff-del,
+:root[data-theme="dark"] .remote-diff-badge .diff-del {
+  color: #f87171;
+}
+.remote-diff-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0;
+}
+.remote-diff-chunk {
+  border-radius: var(--radius-md, 6px);
+  overflow: hidden;
+  border: 1px solid var(--cds-border, #1e222a);
+  background: var(--cds-surface-0, transparent);
+}
+.remote-diff-chunk.del {
+  background: rgba(239, 68, 68, 0.05);
+  border-color: rgba(239, 68, 68, 0.22);
+}
+.remote-diff-chunk.add {
+  background: rgba(34, 197, 94, 0.05);
+  border-color: rgba(34, 197, 94, 0.22);
+}
+.remote-diff-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--cds-border, rgba(0, 0, 0, 0.06));
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.02));
+}
+.remote-diff-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+.remote-diff-chunk.del .remote-diff-tag {
+  color: #ef4444;
+}
+.remote-diff-chunk.add .remote-diff-tag {
+  color: #16a34a;
+}
+[data-theme="dark"] .remote-diff-chunk.add .remote-diff-tag {
+  color: #4ade80;
+}
+.remote-diff-pre {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--cds-text-primary, #f1f5f9);
+  background: transparent;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+.remote-question-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0;
+}
+.remote-question-item {
+  background: var(--cds-surface-0, #f5f5f3);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.1));
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.remote-question-item-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.remote-question-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--cds-blue, #2563eb);
+  text-transform: uppercase;
+}
+.remote-question-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cds-text-primary, #151515);
+}
+.remote-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.remote-option-item {
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: var(--cds-surface-1, #fcfcfb);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.1));
+  font-size: 11.5px;
+}
+.remote-option-item.selected {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.08);
+}
+.remote-option-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 550;
+  color: var(--cds-text-primary, #151515);
+}
+.remote-option-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--cds-green, #3b8a5a);
+}
+.remote-option-desc {
+  font-size: 11px;
+  color: var(--cds-text-muted, #6b7280);
+  margin-top: 1px;
+}
+.remote-console pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.6 ui-monospace,
+    Consolas,
+    monospace;
+}
+@keyframes card-fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.remote-approval {
+  border: 1px solid var(--cds-border-strong, rgba(217, 119, 87, 0.4));
+  background: var(--cds-surface-2, #ffffff);
+  padding: 18px 20px;
+  border-radius: var(--radius-2xl, 16px);
+  margin: 0 auto 20px;
+  max-width: var(--remote-measure);
+  width: 100%;
+  box-shadow: var(--cds-shadow-md);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  animation: card-fade-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.remote-approval.state-pending-approval {
+  border-color: rgba(217, 119, 87, 0.55);
+  will-change: box-shadow;
+  transform: translateZ(0);
+  animation:
+    card-fade-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both,
+    cds-clay-breathe-glow 3.2s ease-in-out 0.28s infinite;
+}
+@keyframes cds-clay-breathe-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(217, 119, 87, 0.25),
+      0 2px 10px rgba(217, 119, 87, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(217, 119, 87, 0.5),
+      0 6px 22px rgba(217, 119, 87, 0.2);
+  }
+}
+[data-theme="dark"] .remote-approval,
+:root[data-theme="dark"] .remote-approval {
+  background: var(--cds-surface-2, #1a1a19);
+  border-color: rgba(217, 119, 87, 0.35);
+}
+.remote-approval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+.remote-approval-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.remote-approval-shield-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
+  color: var(--cds-clay, #d97757);
+  flex-shrink: 0;
+}
+.remote-approval-tool-badge {
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.06));
+  color: var(--cds-text-secondary, #374151);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 5px);
+  font-family: var(--font-mono);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.08));
+}
+.remote-approval h3 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0;
+  color: var(--cds-text-primary, #111827);
+  letter-spacing: -0.01em;
+}

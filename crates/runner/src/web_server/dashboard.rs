@@ -4,6 +4,7 @@ use super::*;
 pub(crate) struct CachedDashboardEntry {
     pub(crate) cached_at: Instant,
     pub(crate) scan_gen: u64,
+    pub(crate) plugin_gen: u64,
     pub(crate) port: u16,
     pub(crate) sessions_loading: bool,
     pub(crate) has_sessions: bool,
@@ -15,6 +16,7 @@ impl CachedDashboardEntry {
     fn from_summary(
         summary: &Value,
         scan_gen: u64,
+        plugin_gen: u64,
         port: u16,
         sessions_loading: bool,
         has_sessions: bool,
@@ -24,6 +26,7 @@ impl CachedDashboardEntry {
         Self {
             cached_at: Instant::now(),
             scan_gen,
+            plugin_gen,
             port,
             sessions_loading,
             has_sessions,
@@ -50,7 +53,22 @@ pub(crate) fn build_cached_dashboard_payload(
     port: u16,
     identity_path: &Path,
 ) -> (Arc<Vec<u8>>, String) {
+    build_cached_dashboard_payload_with_store_ready(
+        handler,
+        port,
+        identity_path,
+        crate::remote_host::is_local_store_ready(),
+    )
+}
+
+pub(crate) fn build_cached_dashboard_payload_with_store_ready(
+    handler: &Arc<dyn DaemonRequestHandler>,
+    port: u16,
+    identity_path: &Path,
+    local_store_ready: bool,
+) -> (Arc<Vec<u8>>, String) {
     let current_scan_gen = crate::remote_host::local_store_scan_generation();
+    let current_plugin_gen = crate::plugins::state_generation();
     if let Ok(guard) = dashboard_summary_cache().read()
         && let Some(ref entry) = *guard
     {
@@ -62,6 +80,7 @@ pub(crate) fn build_cached_dashboard_payload(
             Duration::from_millis(500)
         };
         if entry.scan_gen == current_scan_gen
+            && entry.plugin_gen == current_plugin_gen
             && entry.port == port
             && entry.cached_at.elapsed() < ttl
         {
@@ -117,7 +136,7 @@ pub(crate) fn build_cached_dashboard_payload(
         obj.insert("remote_enabled".to_string(), json!(remote_enabled));
         obj.insert("connected".to_string(), json!(remote_connected));
     }
-    let sessions_loading = is_starting || !crate::remote_host::is_local_store_ready();
+    let sessions_loading = is_starting || !local_store_ready;
     let total_sessions = stats.total_sessions;
 
     let (local_plugins, plugin_registry_url) = crate::plugins::list_local_plugins_view_cached();
@@ -164,6 +183,7 @@ pub(crate) fn build_cached_dashboard_payload(
     });
 
     if total_sessions == 0
+        && (sessions_loading || is_starting)
         && let Ok(guard) = dashboard_summary_cache().read()
         && let Some(ref prev) = *guard
         && prev.has_sessions
@@ -182,16 +202,18 @@ pub(crate) fn build_cached_dashboard_payload(
     }
 
     let final_scan_gen = crate::remote_host::local_store_scan_generation();
+    let final_plugin_gen = crate::plugins::state_generation();
     let entry = CachedDashboardEntry::from_summary(
         &summary,
         final_scan_gen,
+        final_plugin_gen,
         port,
         sessions_loading,
         total_sessions > 0,
     );
     let out = (Arc::clone(&entry.json_bytes), entry.etag.clone());
 
-    if is_ready && total_sessions > 0 {
+    if is_ready && (total_sessions > 0 || !sessions_loading) {
         if let Ok(mut guard) = dashboard_summary_cache().write() {
             *guard = Some(entry);
         }

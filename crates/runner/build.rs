@@ -57,13 +57,23 @@ fn main() {
 }
 
 fn try_compile_with_windres(rc_path: &Path, res_path: &Path) -> bool {
-    let candidates = [
-        PathBuf::from(r"C:\Users\tanner\AppData\Local\Programs\msys64\ucrt64\bin\windres.exe"),
+    let mut candidates = vec![
         PathBuf::from("x86_64-w64-mingw32-windres"),
         PathBuf::from("/usr/bin/x86_64-w64-mingw32-windres"),
         PathBuf::from("windres.exe"),
         PathBuf::from("windres"),
     ];
+    if let Some(local) = env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
+        candidates.insert(
+            0,
+            PathBuf::from(local)
+                .join("Programs")
+                .join("msys64")
+                .join("ucrt64")
+                .join("bin")
+                .join("windres.exe"),
+        );
+    }
 
     for candidate in &candidates {
         let status = Command::new(candidate)

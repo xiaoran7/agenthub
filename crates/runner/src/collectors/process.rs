@@ -12,6 +12,8 @@ pub(crate) enum BoundedLine {
     Io(std::io::Error),
 }
 
+const MAX_OVERSIZED_DRAIN_BYTES: usize = 64 * 1024 * 1024;
+
 /// Read one newline-terminated line while enforcing the size limit during the
 /// read. `read_line` would buffer an arbitrarily long line before any length
 /// check could run, letting a misbehaving child exhaust memory.
@@ -34,12 +36,66 @@ pub(crate) fn read_bounded_line(reader: &mut impl BufRead) -> BoundedLine {
             None => (buffer.len(), false),
         };
         if line.len() + take > MAX_PROTOCOL_LINE_BYTES {
+            drop(line);
+            reader.consume(take);
+            if !found_newline {
+                drain_until_newline_or_cap(reader, MAX_OVERSIZED_DRAIN_BYTES);
+            }
             return BoundedLine::TooLarge;
         }
         line.extend_from_slice(&buffer[..take]);
         reader.consume(take);
         if found_newline {
             return finish_line(line);
+        }
+    }
+}
+
+fn drain_until_newline_or_cap(reader: &mut impl BufRead, max_bytes: usize) {
+    let mut drained = 0usize;
+    while drained < max_bytes {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return,
+        };
+        if buffer.is_empty() {
+            return;
+        }
+        let (take, found_newline) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(position) => (position + 1, true),
+            None => (buffer.len(), false),
+        };
+        reader.consume(take);
+        drained = drained.saturating_add(take);
+        if found_newline {
+            return;
+        }
+    }
+}
+
+/// Discards raw bytes up to and including the next `\n` (or EOF) without UTF-8
+/// validation or unbounded buffer allocation. Used after seeking into the middle
+/// of a JSONL file.
+pub(crate) fn discard_until_newline(reader: &mut impl BufRead) -> std::io::Result<u64> {
+    let mut skipped = 0_u64;
+    loop {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if buffer.is_empty() {
+            return Ok(skipped);
+        }
+        let (take, found_newline) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(position) => (position + 1, true),
+            None => (buffer.len(), false),
+        };
+        reader.consume(take);
+        skipped = skipped.saturating_add(take as u64);
+        if found_newline {
+            return Ok(skipped);
         }
     }
 }
@@ -301,6 +357,7 @@ pub(crate) fn validate_safe_session_id(sid: &str) -> bool {
     let s = sid.trim();
     !s.is_empty()
         && s.len() <= 128
+        && !s.starts_with('-')
         && !s.contains("..")
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))

@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$ServerUrl = "",
-    [string]$BindingCode = ""
+    [string]$BindingCode = "",
+    [string]$Workspace = "",
+    [string]$CodexBinary = "codex",
+    [int]$WebPort = 4200
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,27 +13,51 @@ function Write-Step([string]$Message) {
     Write-Host "`n$Message" -ForegroundColor Cyan
 }
 
-function Invoke-Runner([string[]]$Arguments) {
-    & $script:RunnerPath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Runner 执行失败（退出码 $LASTEXITCODE）。请确认接入包完整后重试。"
+function ConvertFrom-SecureStringPlain([Security.SecureString]$SecureValue) {
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureValue)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
 }
 
+function Invoke-Runner([string[]]$Arguments) {
+    & $script:RunnerPath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runner exited with code $LASTEXITCODE. Verify the bundle files and try again."
+    }
+}
+
+if ($WebPort -lt 1 -or $WebPort -gt 65535) {
+    throw "WebPort must be between 1 and 65535."
+}
+
 if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
-    $ServerUrl = Read-Host "请输入自部署 AgentHub 服务器地址（例如 http://localhost:3000 或 http://你的服务器IP:3000）"
+    $ServerUrl = Read-Host "Enter your AgentHub Gateway URL (e.g. https://agent.example.com or http://localhost:3000)"
 }
 
 $ServerUrl = $ServerUrl.Trim().TrimEnd("/")
 if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
-    throw "服务器地址不能为空。"
+    throw "Server URL cannot be empty."
 }
 $parsedUrl = $null
 if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$parsedUrl)) {
-    throw "服务器地址不是有效的 URL。"
+    throw "Server URL is not a valid absolute URL."
 }
 if ($parsedUrl.Scheme -ne "https" -and $parsedUrl.Scheme -ne "http") {
-    throw "服务器地址必须使用 http 或 https 协议。"
+    throw "Server URL must use the http or https scheme."
+}
+
+if ([string]::IsNullOrWhiteSpace($Workspace)) {
+    $Workspace = (Get-Location).Path
+    if ([string]::IsNullOrWhiteSpace($Workspace)) {
+        $Workspace = $PSScriptRoot
+    }
+}
+$Workspace = [IO.Path]::GetFullPath($Workspace.Trim())
+if (-not (Test-Path -LiteralPath $Workspace -PathType Container)) {
+    throw "Workspace directory does not exist: $Workspace"
 }
 
 $script:RunnerPath = Join-Path $PSScriptRoot "agenthub-runner.exe"
@@ -38,7 +65,7 @@ if (-not (Test-Path -LiteralPath $script:RunnerPath -PathType Leaf)) {
     $script:RunnerPath = Join-Path $PSScriptRoot "agent-pulse-runner.exe"
 }
 if (-not (Test-Path -LiteralPath $script:RunnerPath -PathType Leaf)) {
-    throw "找不到 agenthub-runner.exe。请把 Runner 程序放到本脚本旁边后重试。"
+    throw "Cannot find agenthub-runner.exe next to this script."
 }
 
 $stateDirectory = Join-Path $env:LOCALAPPDATA "AgentHub"
@@ -47,7 +74,7 @@ $databasePath = Join-Path $stateDirectory "runner.db"
 $connectionMarkerPath = Join-Path $stateDirectory "connected-server.txt"
 New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
 
-Write-Step "准备设备身份"
+Write-Step "Preparing device identity"
 $identityCreated = $false
 if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
     Invoke-Runner @("device", "init", "--identity", $identityPath)
@@ -55,34 +82,52 @@ if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
 }
 
 $connectedServer = if (Test-Path -LiteralPath $connectionMarkerPath -PathType Leaf) {
-    (Get-Content -Raw -LiteralPath $connectionMarkerPath).Trim()
+    $rawMarker = Get-Content -Raw -LiteralPath $connectionMarkerPath
+    if ([string]::IsNullOrWhiteSpace($rawMarker)) { "" } else { $rawMarker.Trim() }
 } else {
     ""
 }
 
 if ($identityCreated -or $connectedServer -ne $ServerUrl) {
+    $resolvedCode = ""
     if ([string]::IsNullOrWhiteSpace($BindingCode)) {
-        $BindingCode = Read-Host "请粘贴控制台中的一次性设备连接码（10 分钟内有效）"
+        $secureCode = Read-Host "Paste the one-time device binding code from the console (valid for 10 minutes)" -AsSecureString
+        $resolvedCode = (ConvertFrom-SecureStringPlain $secureCode).Trim()
+    } else {
+        $resolvedCode = $BindingCode.Trim()
     }
-    if ([string]::IsNullOrWhiteSpace($BindingCode)) {
-        throw "连接码不能为空。"
+    if ([string]::IsNullOrWhiteSpace($resolvedCode)) {
+        throw "Binding code cannot be empty."
     }
 
-    Write-Step "连接到服务器"
-    Invoke-Runner @(
-        "device", "bind",
-        "--identity", $identityPath,
-        "--server", $ServerUrl,
-        "--binding-code", $BindingCode.Trim()
-    )
+    Write-Step "Binding device to Gateway"
+    $env:AGENT_PLATFORM_BINDING_CODE = $resolvedCode
+    try {
+        Invoke-Runner @(
+            "device", "bind",
+            "--identity", $identityPath,
+            "--server", $ServerUrl
+        )
+    } finally {
+        Remove-Item Env:AGENT_PLATFORM_BINDING_CODE -ErrorAction SilentlyContinue
+        $resolvedCode = ""
+        $BindingCode = ""
+    }
     Set-Content -LiteralPath $connectionMarkerPath -Value $ServerUrl -Encoding utf8
 }
 
-Write-Host "`n设备已连接：$ServerUrl" -ForegroundColor Green
-Write-Host "Runner 正在运行。请保持此窗口开启；按 Ctrl+C 可停止。" -ForegroundColor Yellow
+Write-Host "`nDevice bound to: $ServerUrl" -ForegroundColor Green
+Write-Host "Workspace: $Workspace" -ForegroundColor Gray
+Write-Host "Local console: http://127.0.0.1:$WebPort" -ForegroundColor Gray
+Write-Host "Runner is starting in Remote v3 mode. Keep this window open or press Ctrl+C to stop." -ForegroundColor Yellow
+
 Invoke-Runner @(
     "--identity", $identityPath,
-    "run", "all",
+    "remote-run",
+    "--codex-binary", $CodexBinary,
+    "--workspace", $Workspace,
     "--db", $databasePath,
-    "--sync-server", $ServerUrl
+    "--server", $ServerUrl,
+    "--web-port", "$WebPort",
+    "--open-browser", "false"
 )

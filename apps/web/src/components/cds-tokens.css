@@ -4,23 +4,19 @@
    ========================================================================== */
 
 :root {
-  /* 1. 表面色彩阶梯 (Surfaces & Colors) */
-  --cds-surface-0: #f5f5f3; /* 窗口/侧边栏基层 Canvas */
-  --cds-surface-1: #fcfcfb; /* 主画布背景底色 */
+  /* 1. 表面色彩阶梯 (Qoder Mint-Porcelain Light Surfaces) */
+  --cds-surface-0: #eff5f2; /* 窗口/侧边栏青瓷浅底 */
+  --cds-surface-1: #f7faf8; /* 主画布清透白瓷底色 */
   --cds-surface-2: #ffffff; /* 消息气泡/卡片表面 */
-  --cds-surface-3: #ffffff; /* 浮动面板/输入终端表面 */
+  --cds-surface-3: #ffffff; /* 浮动胶囊输入终端表面 */
   --cds-surface-popover: #ffffff; /* 悬浮 Popover 纯白表面 */
 
-  --cds-clay: #d97757; /* 品牌陶土主色 */
-  /* 陶土色作为 "文字" 时的专用档位。
-   * #d97757 在白底上只有 3.0:1，`--cds-clay-hover` 也只有 4.0:1，都够不上
-   * WCAG AA 的 4.5:1，一旦拿来写 11~13px 的小字就是"好看的糊字"。
-   * 填充色和文字色从此分家：图形/底色继续用 --cds-clay，文字用 --cds-clay-ink。
-   * 同色相压暗到 17.8°，白底 5.6:1，chip 的浅陶土底上 5.1:1。 */
-  --cds-clay-ink: #a9481f;
-  --cds-clay-hover: #cc5a36; /* 陶土色悬停加深态 */
-  --cds-clay-light: #fbf3ef; /* 陶土极浅背景色 */
-  --cds-clay-soft: rgba(217, 119, 87, 0.12);
+  --cds-clay: #267861; /* Qoder 森绿品牌主色 */
+  /* 品牌强调文字色：#1f6a57 在白底上对比度 6.2:1，在 #e6f5f0 浅薄荷底上 5.5:1，稳过 WCAG AA */
+  --cds-clay-ink: #1f6a57;
+  --cds-clay-hover: #1d5e4c; /* 森绿悬停加深态 */
+  --cds-clay-light: #e6f5f0; /* 极浅薄荷背景色 */
+  --cds-clay-soft: rgba(38, 120, 97, 0.11);
 
   /* 2. Alpha 透明度与边框色系 */
   --cds-alpha-0: hsla(0, 0%, 8%, 0);
@@ -61,43 +57,43 @@
   --cds-shadow-composer-hover:
     0 4px 24px rgba(0, 0, 0, 0.06), inset 0 0 0 1px var(--cds-border-strong);
   --cds-shadow-composer-focus:
-    0 4px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px var(--cds-clay),
-    0 0 0 1.5px rgba(217, 119, 87, 0.25);
+    0 4px 24px rgba(22, 34, 28, 0.08), inset 0 0 0 1px var(--cds-clay),
+    0 0 0 2px rgba(38, 120, 97, 0.2);
 
   /* 6. 三层焦点微光环与拖拽微光 */
   --cds-focus-shadow:
     inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay),
-    0 0 6px 1px rgba(217, 119, 87, 0.25);
+    0 0 6px 1px rgba(38, 120, 97, 0.22);
   --cds-shadow-drop-glow:
-    inset 0 0 24px -2px rgba(217, 119, 87, 0.2), inset 0 0 0 2px var(--cds-clay);
+    inset 0 0 24px -2px rgba(38, 120, 97, 0.18), inset 0 0 0 2px var(--cds-clay);
 
   /* 7. 交互填充与文本色阶 */
   --cds-fill-ghost-hover: var(--cds-alpha-1);
   --cds-fill-ghost-selected: var(--cds-alpha-2);
   --cds-fill-secondary: var(--cds-alpha-2);
-  --cds-fill-secondary-hover: rgba(21, 21, 21, 0.14);
+  --cds-fill-secondary-hover: rgba(22, 34, 28, 0.12);
 
-  --cds-text-primary: #111827;
-  --cds-text-secondary: #374151;
-  --cds-text-muted: #64666d;
-  --cds-bg-tint-blue: #f0f4f8;
-  --cds-segmented-track: rgba(0, 0, 0, 0.06);
+  --cds-text-primary: #16221c;
+  --cds-text-secondary: #46574e;
+  --cds-text-muted: #5c6e64;
+  --cds-bg-tint-blue: #e6f4ee;
+  --cds-segmented-track: rgba(22, 34, 28, 0.06);
   --cds-segmented-thumb: #ffffff;
 
   /* 语义状态色：别名到 globals.css 的 --remote-* ，随浅色/深色主题自动切换 */
-  --cds-green: var(--remote-green, #16a34a);
-  --cds-blue: var(--remote-blue, #2563eb);
+  --cds-green: var(--remote-green, #1f7a5a);
+  --cds-blue: var(--remote-blue, #267861);
 
-  /* 8. 圆角阶梯 (Radius Hierarchy) */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --cds-panel-radius: 10px;
-  --radius-xl: 12px;
-  --radius-2xl: 16px;
-  --cds-message-bubble-radius: 18px;
-  --cds-radius-composer: 20px;
+  /* 8. 圆角阶梯 (Qoder Modern Soft Radius Hierarchy) */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --cds-panel-radius: 14px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --cds-message-bubble-radius: 20px;
+  --cds-radius-composer: 22px;
   --df-radius-pill: 999px;
 
   /* 9. 滚动渐隐羽化高度 */
@@ -127,17 +123,17 @@
 [data-theme="dark"],
 :root[data-theme="dark"],
 .dark {
-  --cds-surface-0: #0b0b0a;
-  --cds-surface-1: #151515;
-  --cds-surface-2: #1a1a19;
-  --cds-surface-3: #20201e;
-  --cds-surface-popover: #222220;
-  --cds-clay: #d97757;
-  /* 暗色底上要把陶土提亮才够对比：#e08264 在 #151515 上是 6.6:1。 */
-  --cds-clay-ink: #e08264;
-  --cds-clay-hover: #e08264;
-  --cds-clay-light: rgba(217, 119, 87, 0.15);
-  --cds-clay-soft: rgba(217, 119, 87, 0.2);
+  --cds-surface-0: #0c0e0d;
+  --cds-surface-1: #0f1110;
+  --cds-surface-2: #171a18;
+  --cds-surface-3: #1f2421;
+  --cds-surface-popover: #222824;
+  --cds-clay: #5cb870;
+  /* Qoder 林墨暗底高对比薄荷绿文字：#8ee5a1 在 #0f1110 上对比度 13.2:1 */
+  --cds-clay-ink: #8ee5a1;
+  --cds-clay-hover: #73cd94;
+  --cds-clay-light: #14261c;
+  --cds-clay-soft: rgba(115, 205, 148, 0.16);
 
   --cds-alpha-0: hsla(0, 0%, 100%, 0);
   --cds-alpha-1: hsla(0, 0%, 100%, 0.05);
@@ -174,25 +170,26 @@
     0 4px 24px rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--cds-border-strong);
   --cds-shadow-composer-focus:
     0 4px 24px rgba(0, 0, 0, 0.65), inset 0 0 0 1px var(--cds-clay),
-    0 0 0 1.5px rgba(217, 119, 87, 0.35);
+    0 0 0 2px rgba(115, 205, 148, 0.28);
 
   --cds-focus-shadow:
     inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay),
-    0 0 8px 2px rgba(217, 119, 87, 0.35);
+    0 0 8px 2px rgba(115, 205, 148, 0.28);
   --cds-shadow-drop-glow:
-    inset 0 0 24px -2px rgba(217, 119, 87, 0.3), inset 0 0 0 2px var(--cds-clay);
+    inset 0 0 24px -2px rgba(115, 205, 148, 0.24),
+    inset 0 0 0 2px var(--cds-clay);
 
   --cds-fill-ghost-hover: var(--cds-alpha-1);
   --cds-fill-ghost-selected: var(--cds-alpha-2);
   --cds-fill-secondary: var(--cds-alpha-2);
   --cds-fill-secondary-hover: rgba(255, 255, 255, 0.14);
 
-  --cds-text-primary: #f9fafb;
-  --cds-text-secondary: #d1d5db;
-  --cds-text-muted: #9ca3af;
-  --cds-bg-tint-blue: rgba(255, 255, 255, 0.06);
+  --cds-text-primary: #f4f5f3;
+  --cds-text-secondary: #b4bcb7;
+  --cds-text-muted: #858e88;
+  --cds-bg-tint-blue: #1a2b22;
   --cds-segmented-track: rgba(255, 255, 255, 0.08);
-  --cds-segmented-thumb: #2c2c2a;
+  --cds-segmented-thumb: #262e29;
 }
 
 /* ==========================================================================

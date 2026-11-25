@@ -20,7 +20,7 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, FindWindowW, IsIconic, IsWindow, PostMessageW, RegisterWindowMessageW,
     SMTO_ABORTIFHUNG, SW_RESTORE, SW_SHOW, SendMessageTimeoutW, SetForegroundWindow, ShowWindow,
-    WM_CLOSE, WM_COPYDATA, WM_DESTROY,
+    WM_CLOSE, WM_COPYDATA,
 };
 
 pub(crate) const WEBVIEW_WINDOW_CLASS: &str = "AgentHubRunnerWebViewClass";
@@ -113,16 +113,17 @@ pub(crate) fn focus_and_navigate_existing(hwnd: HWND, url: &str) -> bool {
             cbData: bytes.len() as u32,
             lpData: bytes.as_ptr() as *mut c_void,
         };
-        let mut _result = 0usize;
-        SendMessageTimeoutW(
+        let mut result = 0usize;
+        let sent = SendMessageTimeoutW(
             hwnd,
             WM_COPYDATA,
             0,
             (&raw const cds) as LPARAM,
             SMTO_ABORTIFHUNG,
             1500,
-            &mut _result,
-        ) != 0
+            &mut result,
+        ) != 0;
+        sent && result != 0
     }
 }
 
@@ -287,7 +288,7 @@ pub fn cleanup_desktop_window() {
         unsafe {
             let hwnd = hwnd_usize as HWND;
             remove_tray_icon(hwnd);
-            PostMessageW(hwnd, WM_DESTROY, 0, 0);
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
         }
     }
 }

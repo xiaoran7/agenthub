@@ -9,7 +9,7 @@
     document.documentElement.style.colorScheme = d ? "dark" : "light";
     var m = document.querySelectorAll('meta[name="theme-color"]');
     for (var i = 0; i < m.length; i++) {
-      m[i].setAttribute("content", d ? "#161514" : "#faf8f5");
+      m[i].setAttribute("content", d ? "#0f1110" : "#f7faf8");
     }
   } catch (_e) {}
 })();

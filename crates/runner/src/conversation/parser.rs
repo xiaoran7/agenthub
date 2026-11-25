@@ -20,20 +20,23 @@ pub fn decode_local_text(bytes: &[u8]) -> String {
         return String::from_utf16_lossy(&units);
     }
     if bytes.len() >= 8 && bytes.len().is_multiple_of(2) {
-        let pairs = bytes.chunks_exact(2).collect::<Vec<_>>();
-        let even_nuls = pairs.iter().filter(|pair| pair[0] == 0).count();
-        let odd_nuls = pairs.iter().filter(|pair| pair[1] == 0).count();
-        let threshold = pairs.len() / 3;
+        let pair_count = bytes.len() / 2;
+        let (even_nuls, odd_nuls) = bytes
+            .chunks_exact(2)
+            .fold((0usize, 0usize), |(e, o), pair| {
+                (e + usize::from(pair[0] == 0), o + usize::from(pair[1] == 0))
+            });
+        let threshold = pair_count / 3;
         if odd_nuls > threshold {
-            let units = pairs
-                .iter()
+            let units = bytes
+                .chunks_exact(2)
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .collect::<Vec<_>>();
             return String::from_utf16_lossy(&units);
         }
         if even_nuls > threshold {
-            let units = pairs
-                .iter()
+            let units = bytes
+                .chunks_exact(2)
                 .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
                 .collect::<Vec<_>>();
             return String::from_utf16_lossy(&units);
@@ -298,12 +301,16 @@ pub(crate) fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
                         .and_then(|id| pending_tools.get(id).copied());
                     if let Some(index) = matched {
                         if !details.trim().is_empty() {
-                            let merged = format!(
-                                "{}\n\n〔结果〕\n{}",
-                                items[index]["content"].as_str().unwrap_or_default(),
-                                details.trim()
+                            let merged = clamp_conversation_content(
+                                &format!(
+                                    "{}\n\n〔结果〕\n{}",
+                                    items[index]["content"].as_str().unwrap_or_default(),
+                                    details.trim()
+                                ),
+                                3_500,
                             );
-                            items[index]["content"] = Value::String(merged);
+                            items[index]["content"] = Value::String(merged.clone());
+                            items[index]["text"] = Value::String(merged);
                         }
                         if failed {
                             items[index]["status"] = Value::String("failed".to_owned());
@@ -461,20 +468,9 @@ pub(crate) fn normalized_role(value: &Value) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn conversation_item(
-    role: &str,
-    kind: &str,
-    label: &str,
-    content: &str,
-    status: &str,
-) -> Value {
+fn clamp_conversation_content(content: &str, max_len: usize) -> String {
     let trimmed = content.trim();
-    let max_len = if matches!(kind, "tool" | "status" | "thinking") {
-        3_500
-    } else {
-        16_000
-    };
-    let final_content = if trimmed.chars().count() > max_len {
+    if trimmed.chars().count() > max_len {
         let head: String = trimmed.chars().take(max_len / 2).collect();
         let tail: String = trimmed
             .chars()
@@ -487,7 +483,22 @@ pub(crate) fn conversation_item(
         format!("{head}\n\n〔内容过长，已省略中段，保留首尾〕\n\n{tail}")
     } else {
         trimmed.to_owned()
+    }
+}
+
+pub(crate) fn conversation_item(
+    role: &str,
+    kind: &str,
+    label: &str,
+    content: &str,
+    status: &str,
+) -> Value {
+    let max_len = if matches!(kind, "tool" | "status" | "thinking") {
+        3_500
+    } else {
+        16_000
     };
+    let final_content = clamp_conversation_content(content, max_len);
     json!({ "role": role, "kind": kind, "label": label, "status": status,
         "content": final_content, "text": final_content })
 }

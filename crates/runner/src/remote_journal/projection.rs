@@ -1,5 +1,131 @@
 use super::*;
 
+const MAX_PROJECTED_TEXT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PROJECTED_HISTORY_ITEM_BYTES: usize = 512 * 1024;
+const MAX_PROJECTED_HISTORY_TOTAL_BYTES: usize = 6 * 1024 * 1024;
+const MAX_PROJECTED_JSON_STRINGS_TOTAL_BYTES: usize = 6 * 1024 * 1024;
+pub(crate) const MAX_PROJECTED_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+fn bound_utf8_string(mut text: String, max_bytes: usize) -> String {
+    if text.len() > max_bytes {
+        crate::collectors::truncate_utf8_bytes(&mut text, max_bytes);
+    }
+    text
+}
+
+fn json_escaped_byte_len(text: &str) -> usize {
+    let mut len = 2usize; // surrounding quotes
+    for byte in text.bytes() {
+        len += match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+            0x00..=0x1f => 6, // \u00XX
+            _ => 1,
+        };
+    }
+    len
+}
+
+fn bound_utf8_json_escaped(mut text: String, max_escaped_bytes: usize) -> (String, bool) {
+    if json_escaped_byte_len(&text) <= max_escaped_bytes {
+        return (text, false);
+    }
+    let budget = max_escaped_bytes.saturating_sub(2);
+    let mut acc = 0usize;
+    let mut cut = 0usize;
+    for (idx, ch) in text.char_indices() {
+        let ch_json_len = if ch.is_ascii() {
+            match ch as u8 {
+                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+                0x00..=0x1f => 6,
+                _ => 1,
+            }
+        } else {
+            ch.len_utf8()
+        };
+        if acc.saturating_add(ch_json_len) > budget {
+            break;
+        }
+        acc += ch_json_len;
+        cut = idx + ch.len_utf8();
+    }
+    text.truncate(cut);
+    (text, true)
+}
+
+fn bound_json_strings(value: &mut Value, max_per_string: usize, remaining_bytes: &mut usize) {
+    match value {
+        Value::String(text) => {
+            let cap = max_per_string.min(*remaining_bytes);
+            if json_escaped_byte_len(text) > cap {
+                let (bounded, _) = bound_utf8_json_escaped(std::mem::take(text), cap);
+                *text = bounded;
+            }
+            *remaining_bytes = remaining_bytes.saturating_sub(json_escaped_byte_len(text));
+        }
+        Value::Array(items) => {
+            for item in items {
+                bound_json_strings(item, max_per_string, remaining_bytes);
+            }
+        }
+        Value::Object(map) => {
+            for val in map.values_mut() {
+                bound_json_strings(val, max_per_string, remaining_bytes);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn enforce_projected_frame_cap(frame: &mut Value, max_bytes: usize) -> Result<()> {
+    if serde_json::to_vec(frame)?.len() <= max_bytes {
+        return Ok(());
+    }
+    let mut trimmed_items = false;
+    while serde_json::to_vec(frame)?.len() > max_bytes {
+        let Some(items) = frame
+            .pointer_mut("/event/raw/params/items")
+            .and_then(Value::as_array_mut)
+        else {
+            break;
+        };
+        if items.len() <= 1 {
+            break;
+        }
+        let drop_count = (items.len() / 4).max(1);
+        items.drain(..drop_count);
+        trimmed_items = true;
+    }
+    if trimmed_items
+        && let Some(obj) = frame
+            .pointer_mut("/event/raw/params")
+            .and_then(Value::as_object_mut)
+    {
+        obj.insert("truncated".into(), json!(true));
+    }
+    let mut budget = max_bytes / 2;
+    for _ in 0..8 {
+        if serde_json::to_vec(frame)?.len() <= max_bytes {
+            return Ok(());
+        }
+        if let Some(raw) = frame.pointer_mut("/event/raw") {
+            let mut remaining = budget;
+            bound_json_strings(raw, budget, &mut remaining);
+            if let Some(params_obj) = raw.get_mut("params").and_then(Value::as_object_mut) {
+                params_obj.insert("truncated".into(), json!(true));
+            }
+        } else {
+            break;
+        }
+        budget /= 2;
+    }
+    if serde_json::to_vec(frame)?.len() > max_bytes
+        && let Some(event_obj) = frame.get_mut("event").and_then(Value::as_object_mut)
+    {
+        event_obj.insert("raw".into(), json!({"params":{"truncated":true}}));
+    }
+    Ok(())
+}
+
 pub(crate) fn projected_remote_receipt(receipt: &CommandReceipt) -> Value {
     let result = receipt.result.as_ref().and_then(|result| {
         let mut projected = serde_json::Map::new();
@@ -36,7 +162,9 @@ pub(crate) fn projected_remote_event(event: &crate::remote_host::HostEvent) -> R
         }
     }
     crate::privacy::sanitize_workspace_paths_in_json(&mut projected);
-    Ok(json!({"type":"event","event":projected}))
+    let mut frame = json!({"type":"event","event":projected});
+    enforce_projected_frame_cap(&mut frame, MAX_PROJECTED_FRAME_BYTES)?;
+    Ok(frame)
 }
 
 /// One-line summary of a `codexErrorInfo` kind object, e.g.
@@ -104,26 +232,49 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
             // key the live item events use). Project one canonical shape so
             // a resumed session shows its history instead of an empty
             // transcript, and drop fields no client understands.
-            let normalized: Vec<Value> = items
-                .iter()
-                .map(|item| {
-                    let mut out = serde_json::Map::new();
-                    for key in ["role", "kind", "label", "status"] {
-                        if let Some(value) = item.get(key).and_then(Value::as_str) {
-                            out.insert(key.into(), json!(value));
+            let mut remaining_budget = MAX_PROJECTED_HISTORY_TOTAL_BYTES;
+            let mut truncated = false;
+            let mut normalized: Vec<Value> = Vec::with_capacity(items.len().min(2048));
+            for item in items {
+                if remaining_budget < 64 {
+                    truncated = true;
+                    break;
+                }
+                let mut out = serde_json::Map::new();
+                let mut meta_bytes = 32usize;
+                for key in ["role", "kind", "label", "status"] {
+                    if let Some(value) = item.get(key).and_then(Value::as_str) {
+                        let (bounded_meta, was_cut) =
+                            bound_utf8_json_escaped(value.to_string(), 1024);
+                        if was_cut {
+                            truncated = true;
                         }
+                        meta_bytes = meta_bytes
+                            .saturating_add(key.len() + 4 + json_escaped_byte_len(&bounded_meta));
+                        out.insert(key.into(), json!(bounded_meta));
                     }
-                    let text = item
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| item.get("content").and_then(extract_text_from_value))
-                        .unwrap_or_default();
-                    out.insert("text".into(), json!(text));
-                    Value::Object(out)
-                })
-                .collect();
-            json!({"params":{"items": normalized}})
+                }
+                remaining_budget = remaining_budget.saturating_sub(meta_bytes);
+                let raw_text = item
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| item.get("content").and_then(extract_text_from_value))
+                    .unwrap_or_default();
+                let cap = MAX_PROJECTED_HISTORY_ITEM_BYTES.min(remaining_budget);
+                let (text, text_cut) = bound_utf8_json_escaped(raw_text, cap);
+                if text_cut {
+                    truncated = true;
+                }
+                remaining_budget = remaining_budget.saturating_sub(json_escaped_byte_len(&text));
+                out.insert("text".into(), json!(text));
+                normalized.push(Value::Object(out));
+            }
+            if truncated {
+                json!({"params":{"items": normalized, "truncated": true}})
+            } else {
+                json!({"params":{"items": normalized}})
+            }
         }),
         "turn/started" => params
             .pointer("/turn/id")
@@ -181,7 +332,10 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
         }
         "item/agentMessage/delta" => {
             let item_id = params.get("itemId").and_then(Value::as_str)?;
-            let delta = params.get("delta").and_then(Value::as_str)?;
+            let delta = bound_utf8_string(
+                params.get("delta").and_then(Value::as_str)?.to_string(),
+                MAX_PROJECTED_TEXT_BYTES,
+            );
             Some(json!({"params":{"itemId":item_id,"delta":delta}}))
         }
         // A turn that died must say why. Without this the remote console shows
@@ -269,7 +423,10 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
                 "text",
             ] {
                 if let Some(value) = item.get(key).and_then(Value::as_str) {
-                    started[key] = json!(value);
+                    started[key] = json!(bound_utf8_string(
+                        value.to_string(),
+                        MAX_PROJECTED_TEXT_BYTES,
+                    ));
                 }
             }
             Some(json!({"params":{"item": started}}))
@@ -280,8 +437,15 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
             match item.get("type").and_then(Value::as_str)? {
                 "userMessage" => {
                     let mut user_item = json!({"id": id, "type": "userMessage"});
+                    let mut remaining = MAX_PROJECTED_JSON_STRINGS_TOTAL_BYTES;
                     if let Some(content) = item.get("content") {
-                        user_item["content"] = content.clone();
+                        let mut bounded_content = content.clone();
+                        bound_json_strings(
+                            &mut bounded_content,
+                            MAX_PROJECTED_TEXT_BYTES,
+                            &mut remaining,
+                        );
+                        user_item["content"] = bounded_content;
                     }
                     let text = item
                         .get("text")
@@ -289,17 +453,20 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
                         .map(str::to_string)
                         .or_else(|| item.get("content").and_then(extract_text_from_value));
                     if let Some(text) = text {
-                        user_item["text"] = json!(text);
+                        user_item["text"] =
+                            json!(bound_utf8_string(text, MAX_PROJECTED_TEXT_BYTES));
                     }
                     Some(json!({"params":{"item": user_item}}))
                 }
                 "agentMessage" => {
-                    let text = item
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| item.get("content").and_then(extract_text_from_value))
-                        .unwrap_or_default();
+                    let text = bound_utf8_string(
+                        item.get("text")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .or_else(|| item.get("content").and_then(extract_text_from_value))
+                            .unwrap_or_default(),
+                        MAX_PROJECTED_TEXT_BYTES,
+                    );
                     Some(json!({"params":{"item":{
                         "id": id,
                         "type": "agentMessage",
@@ -308,11 +475,24 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
                 }
                 "commandExecution" => {
                     let mut cmd_item = json!({"id": id, "type": "commandExecution"});
+                    let mut remaining = MAX_PROJECTED_JSON_STRINGS_TOTAL_BYTES;
                     if let Some(cmd) = item.get("command") {
-                        cmd_item["command"] = cmd.clone();
+                        let mut bounded_cmd = cmd.clone();
+                        bound_json_strings(
+                            &mut bounded_cmd,
+                            MAX_PROJECTED_TEXT_BYTES,
+                            &mut remaining,
+                        );
+                        cmd_item["command"] = bounded_cmd;
                     }
                     if let Some(output) = item.get("output") {
-                        cmd_item["output"] = output.clone();
+                        let mut bounded_output = output.clone();
+                        bound_json_strings(
+                            &mut bounded_output,
+                            MAX_PROJECTED_TEXT_BYTES,
+                            &mut remaining,
+                        );
+                        cmd_item["output"] = bounded_output;
                     }
                     if let Some(status) = item.get("status") {
                         cmd_item["status"] = status.clone();
@@ -323,12 +503,15 @@ pub(crate) fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Opti
                     Some(json!({"params":{"item": cmd_item}}))
                 }
                 "thinking" => {
-                    let text = item
-                        .get("text")
-                        .or_else(|| item.get("thought"))
-                        .or_else(|| item.get("thinking"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
+                    let text = bound_utf8_string(
+                        item.get("text")
+                            .or_else(|| item.get("thought"))
+                            .or_else(|| item.get("thinking"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        MAX_PROJECTED_TEXT_BYTES,
+                    );
                     Some(json!({"params":{"item": {
                         "id": id,
                         "type": "thinking",

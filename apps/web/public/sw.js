@@ -103,9 +103,16 @@ async function openPanel(session) {
     type: "window",
     includeUncontrolled: true,
   });
-  const sameOrigin = clients.filter(
-    (client) => new URL(client.url).origin === self.location.origin,
-  );
+  const sameOrigin = clients.filter((client) => {
+    try {
+      const url = new URL(client.url);
+      if (url.origin !== self.location.origin) return false;
+      const pathname = url.pathname.replace(/\/+$/u, "") || "/";
+      return pathname === "/" || pathname === "/remote";
+    } catch {
+      return false;
+    }
+  });
   const preferred =
     sameOrigin.find((c) => c.focused) ??
     sameOrigin.find((c) => c.visibilityState === "visible") ??

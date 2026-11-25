@@ -1,20 +1,13 @@
 package com.agentplatform.mobile.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
@@ -23,15 +16,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -39,24 +25,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.agentplatform.mobile.AppController
 import com.agentplatform.mobile.data.AgentGateway
-import com.agentplatform.mobile.data.AttachmentReader
-import com.agentplatform.mobile.data.AttachmentResult
 import com.agentplatform.mobile.data.ComposerMode
 import com.agentplatform.mobile.data.ConnectMode
 import com.agentplatform.mobile.data.isCodexThreadId
@@ -71,7 +50,6 @@ import com.agentplatform.mobile.data.RemoteCommandRecord
 import com.agentplatform.mobile.data.RemoteEvent
 import com.agentplatform.mobile.data.RemoteSessionRow
 import com.agentplatform.mobile.data.SandboxMode
-import com.agentplatform.mobile.data.SessionDetail
 import com.agentplatform.mobile.data.SessionPhase
 import com.agentplatform.mobile.data.connectCommand
 import com.agentplatform.mobile.data.describeGatewayError
@@ -79,21 +57,14 @@ import com.agentplatform.mobile.data.displayEngineLabel
 import com.agentplatform.mobile.data.engineOfSession
 import com.agentplatform.mobile.data.matchCatalogModel
 import com.agentplatform.mobile.data.modelsForEngine
+import com.agentplatform.mobile.data.optStringOrEmpty
 import com.agentplatform.mobile.data.sendPromptCommand
-import com.agentplatform.mobile.data.summarizeAttachmentResults
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
-import kotlin.coroutines.coroutineContext
-import kotlinx.coroutines.CancellationException
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
 import org.json.JSONObject
 
 // =========================================================================
@@ -115,7 +86,6 @@ internal fun RemoteScreen(
 
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val binding = session.binding
     val hubId = binding.hubSessionId
@@ -132,37 +102,29 @@ internal fun RemoteScreen(
     var actionError by remember(gateway, runnerId, hubId) { mutableStateOf("") }
     var sending by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
     var takeoverCommandId by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
+    var takeoverGeneration by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
     var reconnecting by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
-    var draft by remember(gateway, runnerId, hubId) { mutableStateOf("") }
+    var attaching by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var submittingQuestionIds by remember(gateway, runnerId, hubId) { mutableStateOf(emptySet<String>()) }
+    var draft by rememberSaveable(runnerId, hubId) { mutableStateOf("") }
     val sessionKey = "$runnerId/$hubId"
     val queuedPrompt = controller.queuedPromptFor(sessionKey)
     var pendingSeedPrompt by remember(runnerId, hubId) { mutableStateOf(seedTurn?.firstPrompt) }
     var handledRejectedCommandIds by remember(runnerId, hubId) { mutableStateOf(emptySet<String>()) }
     var manualInterruptPending by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
     var wasBusy by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
-    var optimisticPrompts by remember(runnerId, hubId) {
-        mutableStateOf(emptyList<OptimisticPrompt>())
-    }
+    var optimisticPrompts by remember(runnerId, hubId) { mutableStateOf(emptyList<OptimisticPrompt>()) }
     var dismissedFailure by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
     var showUsage by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showQuickKeys by remember { mutableStateOf(false) }
-    var copiedHeaderId by remember { mutableStateOf(false) }
 
-    var effort by remember(gateway, runnerId, hubId) {
-        mutableStateOf(seedTurn?.effort ?: EffortLevel.DEFAULT)
-    }
-    var model by remember(gateway, runnerId, hubId) { mutableStateOf(seedTurn?.model.orEmpty()) }
+    var effort by rememberSaveable(runnerId, hubId) { mutableStateOf(seedTurn?.effort ?: EffortLevel.DEFAULT) }
+    var model by rememberSaveable(runnerId, hubId) { mutableStateOf(seedTurn?.model.orEmpty()) }
     var modelExplicitlyCleared by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
-    var permissionMode by remember(gateway, runnerId, hubId) {
-        mutableStateOf(seedTurn?.permissionMode ?: PermissionMode.DEFAULT)
-    }
-    var permissionModeTouched by remember(gateway, runnerId, hubId) {
-        mutableStateOf(seedTurn?.permissionTouched == true)
-    }
-    var attachments by remember(gateway, runnerId, hubId) {
-        mutableStateOf(emptyList<RemoteAttachment>())
-    }
+    var permissionMode by rememberSaveable(runnerId, hubId) { mutableStateOf(seedTurn?.permissionMode ?: PermissionMode.DEFAULT) }
+    var permissionModeTouched by rememberSaveable(runnerId, hubId) { mutableStateOf(seedTurn?.permissionTouched == true) }
+    var attachments by remember(gateway, runnerId, hubId) { mutableStateOf(emptyList<RemoteAttachment>()) }
 
     LaunchedEffect(seedTurn) {
         if (seedTurn != null) {
@@ -172,13 +134,6 @@ internal fun RemoteScreen(
             onSeedConsumed()
         }
     }
-    LaunchedEffect(copiedHeaderId) {
-        if (copiedHeaderId) {
-            delay(1800)
-            copiedHeaderId = false
-        }
-    }
-
     var attachmentNotice by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
     var detailBinding by remember(gateway, runnerId, hubId) { mutableStateOf<RemoteBinding?>(null) }
     val listState = rememberLazyListState()
@@ -201,15 +156,16 @@ internal fun RemoteScreen(
                 it.providerSessionId == liveBinding.providerSessionId
             }
         }
-    val hostPlugins = host?.hello?.plugins?.takeIf { it.isNotEmpty() } ?: controller.state.plugins.orEmpty()
-    val engine = engineOfSession(liveBinding.providerSessionId, candidate?.provider, hostPlugins)
-    val runtimeLabel = displayEngineLabel(engine, liveBinding.providerSessionId, candidate?.provider, hostPlugins)
+    val hostPlugins = mergeHostPlugins(host?.hello?.plugins, controller.state.plugins.orEmpty())
+    val reportedProvider = current.provider ?: candidate?.provider
+    val engine = engineOfSession(liveBinding.providerSessionId, reportedProvider, hostPlugins)
+    val runtimeLabel = displayEngineLabel(engine, liveBinding.providerSessionId, reportedProvider, hostPlugins)
     val modelOptions =
-        remember(host?.models, engine, candidate?.provider, liveBinding.providerSessionId) {
+        remember(host?.models, engine, reportedProvider, liveBinding.providerSessionId) {
             modelsForEngine(
                 catalog = host?.models ?: ModelCatalog.Empty,
                 engine = engine,
-                reportedProvider = candidate?.provider,
+                reportedProvider = reportedProvider,
                 providerSessionId = liveBinding.providerSessionId,
             )
         }
@@ -226,8 +182,8 @@ internal fun RemoteScreen(
 
     // Cross-device attention alert for other sessions waiting on user approval/input
     val otherAttention =
-        remember(controller.state.snapshot, runnerId, hubId) {
-            buildAttentionQueue(controller.state.snapshot).filterNot {
+        remember(controller.state.snapshot, controller.state.plugins, runnerId, hubId) {
+            buildAttentionQueue(controller.state.snapshot, controller.state.plugins.orEmpty()).filterNot {
                 it.entry.runnerId == runnerId && it.entry.hubSessionId == hubId
             }
         }
@@ -250,9 +206,16 @@ internal fun RemoteScreen(
                         evaluateRejectedCommands(nextCommands, handledRejectedCommandIds, announceErrors = seeded)
                     if (outcome.newIds.isNotEmpty()) handledRejectedCommandIds += outcome.newIds
                     if (outcome.errorMessage != null) actionError = outcome.errorMessage
-                    if (outcome.prunedPromptText != null && optimisticPrompts.isNotEmpty()) {
-                        val idx = optimisticPrompts.indexOfLast { it.text == outcome.prunedPromptText }
-                        if (idx >= 0) optimisticPrompts = optimisticPrompts.filterIndexed { i, _ -> i != idx }
+                    if (outcome.prunedPrompts.isNotEmpty() && optimisticPrompts.isNotEmpty()) {
+                        optimisticPrompts = pruneRejectedOptimisticPrompts(optimisticPrompts, outcome)
+                    }
+                    if (outcome.newIds.isNotEmpty() && submittingQuestionIds.isNotEmpty()) {
+                        val failedQIds =
+                            nextCommands
+                                .filter { it.action == "answer_question" && it.receipt?.optStringOrEmpty("status").let { s -> !s.isNullOrEmpty() && s != "accepted" } }
+                                .mapNotNull { it.command.optJSONObject("command")?.optStringOrEmpty("question_id")?.takeIf(String::isNotBlank) }
+                                .toSet()
+                        if (failedQIds.isNotEmpty()) submittingQuestionIds = submittingQuestionIds - failedQIds
                     }
                 },
                 onDetailBindingUpdated = { detailBinding = it },
@@ -266,7 +229,7 @@ internal fun RemoteScreen(
 
     LaunchedEffect(seeded, current.online, generation) {
         if (seeded && current.online && codexSession && events.isEmpty() &&
-            commands.none { it.command.optJSONObject("command")?.optString("mode") == "preview" }) {
+            commands.none { it.command.optJSONObject("command")?.optStringOrEmpty("mode") == "preview" }) {
             controller.dispatch(
                 runnerId = runnerId,
                 hubSessionId = hubId,
@@ -362,7 +325,10 @@ internal fun RemoteScreen(
         onFailure: (() -> Unit)? = null,
         onQueued: ((String) -> Unit)? = null,
     ) {
-        if (sending) return
+        if (sending) {
+            onFailure?.invoke()
+            return
+        }
         sending = true
         actionError = ""
         controller.dispatch(
@@ -402,7 +368,7 @@ internal fun RemoteScreen(
             trimmed.ifEmpty {
                 "请查看附件：" + promptAttachments.joinToString("、") { it.name }
             }
-        val optId = "optimistic-${System.currentTimeMillis()}"
+        val optId = "optimistic-${UUID.randomUUID()}"
         val neededUserRows =
             nextOptimisticPromptNeeded(
                 pending = pendingPrompts.map { it.neededUserRows },
@@ -429,7 +395,13 @@ internal fun RemoteScreen(
                     acquireControl = acquireControl,
                 ),
             clearComposerOnSuccess = false,
-            onQueued = if (acquireControl) { id -> takeoverCommandId = id } else null,
+            onQueued = { id ->
+                optimisticPrompts = optimisticPrompts.map { if (it.id == optId) it.copy(clientCmdId = id) else it }
+                if (acquireControl) {
+                    takeoverCommandId = id
+                    takeoverGeneration = generation
+                }
+            },
             onFailure = {
                 optimisticPrompts = optimisticPrompts.filterNot { it.id == optId }
                 if (savedDraft != null) {
@@ -444,20 +416,54 @@ internal fun RemoteScreen(
 
     LaunchedEffect(commands, takeoverCommandId) {
         val id = takeoverCommandId ?: return@LaunchedEffect
-        val command = commands.firstOrNull { it.command.optString("client_cmd_id") == id } ?: return@LaunchedEffect
+        val command = commands.firstOrNull { it.command.optStringOrEmpty("client_cmd_id") == id } ?: return@LaunchedEffect
         val receipt = command.receipt ?: return@LaunchedEffect
         takeoverCommandId = null
-        if (receipt.optString("status") == "accepted") {
+        takeoverGeneration = null
+        if (receipt.optStringOrEmpty("status") == "accepted") {
             draft = ""
             attachments = emptyList()
         }
     }
 
+    LaunchedEffect(takeoverCommandId, current.online, generation, render.connected) {
+        val id = takeoverCommandId ?: return@LaunchedEffect
+        val sameGeneration = takeoverGeneration == null || generation == takeoverGeneration
+        if (current.online && render.connected && sameGeneration) {
+            draft = ""
+            attachments = emptyList()
+            takeoverCommandId = null
+            takeoverGeneration = null
+            return@LaunchedEffect
+        }
+        if (!current.online || !sameGeneration) {
+            takeoverCommandId = null
+            takeoverGeneration = null
+            return@LaunchedEffect
+        }
+        delay(30_000L)
+        if (takeoverCommandId == id) {
+            takeoverCommandId = null
+            takeoverGeneration = null
+            actionError = "接管会话超时，请重试。"
+        }
+    }
+
+    LaunchedEffect(questions) {
+        if (submittingQuestionIds.isNotEmpty()) {
+            val activeIds = questions.mapTo(HashSet()) { it.questionId }
+            submittingQuestionIds = submittingQuestionIds.filterTo(HashSet()) { it in activeIds }
+        }
+    }
+
     fun queueCurrentDraft() {
+        val totalBefore = queuedPrompt?.attachments.orEmpty().size + attachments.size
         val next = mergeQueuedPrompt(queuedPrompt, draft, attachments) ?: return
+        val dropped = totalBefore - next.attachments.size
         controller.setQueuedPromptFor(sessionKey, next)
         draft = ""
         attachments = emptyList()
+        if (dropped > 0) attachmentNotice = "有 $dropped 个附件超出总大小或数量上限，未加入队列"
     }
 
     // Dispatch seeded initial prompt only after control channel is connected and composer is ready.
@@ -465,8 +471,8 @@ internal fun RemoteScreen(
         val promptAction = pendingSeedPrompt ?: return@LaunchedEffect
         if (render.connected && mode == ComposerMode.READY && !sending) {
             pendingSeedPrompt = null
-            val text = promptAction.optString("text").trim()
-            val optId = if (text.isNotEmpty()) "optimistic-${System.currentTimeMillis()}" else null
+            val text = promptAction.optStringOrEmpty("text").trim()
+            val optId = if (text.isNotEmpty()) "optimistic-${UUID.randomUUID()}" else null
             if (optId != null) {
                 val needed =
                     nextOptimisticPromptNeeded(
@@ -477,6 +483,11 @@ internal fun RemoteScreen(
             }
             send(
                 action = promptAction,
+                onQueued = { id ->
+                    if (optId != null) {
+                        optimisticPrompts = optimisticPrompts.map { if (it.id == optId) it.copy(clientCmdId = id) else it }
+                    }
+                },
                 onFailure = {
                     if (optId != null) optimisticPrompts = optimisticPrompts.filterNot { it.id == optId }
                 },
@@ -547,19 +558,28 @@ internal fun RemoteScreen(
     }
 
     fun attachPicked(uris: List<android.net.Uri>) {
-        if (uris.isEmpty()) return
+        if (uris.isEmpty() || attaching) return
+        attaching = true
         scope.launch {
-            val (ready, notice) =
-                readPickedAttachments(
-                    context = context,
-                    uris = uris,
-                    existingCount = attachments.size,
-                    existingAttachments = attachments,
-                )
-            if (ready.isNotEmpty()) {
-                attachments = (attachments + ready).take(AttachmentReader.MAX_ATTACHMENTS)
+            try {
+                val (ready, notice) =
+                    readPickedAttachments(
+                        context = context,
+                        uris = uris,
+                        existingCount = attachments.size,
+                        existingAttachments = attachments,
+                    )
+                var dropped = 0
+                if (ready.isNotEmpty()) {
+                    val merged = mergeAttachmentsWithinBudget(attachments, ready)
+                    attachments = merged.attachments
+                    dropped = merged.droppedCount
+                }
+                attachmentNotice =
+                    notice ?: if (dropped > 0) "有 $dropped 个附件超出总大小或数量上限，未加入" else null
+            } finally {
+                attaching = false
             }
-            attachmentNotice = notice
         }
     }
 
@@ -584,19 +604,19 @@ internal fun RemoteScreen(
                         .ifBlank { "会话" },
                 deviceTitle = deviceLabel(runnerId, host?.hello?.deviceName),
                 runtimeLabel = runtimeLabel,
+                engine = engine,
                 hostOnline = current.online,
                 controlConnected = liveBinding.controlConnected,
                 state = state,
-                stoppable = render.stoppable,
-                sending = sending,
+                actionsEnabled = render.connected && !composerSending,
                 sessionIdDisplay = sessionIdDisplay,
-                usage = usage,
+                hasUsage = usage != null,
+                showUsage = showUsage,
+                showQuickKeys = showQuickKeys,
                 onBack = onBack,
                 onToggleUsage = { showUsage = !showUsage },
-                onInterrupt = {
-                    manualInterruptPending = true
-                    send(JSONObject().put("action", "interrupt"))
-                },
+                onToggleQuickKeys = { showQuickKeys = !showQuickKeys },
+                onOpenSettings = { showSettingsSheet = true },
             )
 
             CrossDeviceAttentionBanner(
@@ -637,56 +657,28 @@ internal fun RemoteScreen(
                 )
             }
 
-            if (approvals.isNotEmpty() || questions.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-                ) {
-                    items(approvals, key = { it.approvalId }) { approval ->
-                        ApprovalCard(
-                            approval = approval,
-                            enabled = render.connected && !sending,
-                            onApprove = {
-                                send(
-                                    JSONObject()
-                                        .put("action", "resolve_approval")
-                                        .put("approval_id", approval.approvalId)
-                                        .put("approved", true),
-                                    targetGeneration = approval.hostGeneration,
-                                )
-                            },
-                            onDecline = {
-                                send(
-                                    JSONObject()
-                                        .put("action", "resolve_approval")
-                                        .put("approval_id", approval.approvalId)
-                                        .put("approved", false),
-                                    targetGeneration = approval.hostGeneration,
-                                )
-                            },
+            RemoteInterventionRail(
+                approvals = approvals,
+                questions = questions,
+                enabled = render.connected && !sending,
+                submittingQuestionIds = submittingQuestionIds,
+                onResolveApproval = { approval, approved ->
+                    send(
+                        resolveApprovalCommand(approval.approvalId, approved),
+                        targetGeneration = approval.hostGeneration,
+                    )
+                },
+                onAnswerQuestion = { question, answer ->
+                    if (!sending && question.questionId !in submittingQuestionIds) {
+                        submittingQuestionIds = submittingQuestionIds + question.questionId
+                        send(
+                            answerQuestionCommand(question.questionId, answer),
+                            targetGeneration = question.hostGeneration,
+                            onFailure = { submittingQuestionIds = submittingQuestionIds - question.questionId },
                         )
                     }
-                    items(questions, key = { it.questionId }) { question ->
-                        QuestionCard(
-                            question = question,
-                            enabled = render.connected && !sending,
-                            onAnswer = { answer ->
-                                send(
-                                    JSONObject()
-                                        .put("action", "answer_question")
-                                        .put("question_id", question.questionId)
-                                        .put(
-                                            "answer",
-                                            if (answer is List<*>) JSONArray(answer) else answer,
-                                        ),
-                                    targetGeneration = question.hostGeneration,
-                                )
-                            },
-                        )
-                    }
-                }
-            }
+                },
+            )
 
             // Transcript area + floating scroll-to-bottom button
             RemoteTranscriptArea(
@@ -714,23 +706,17 @@ internal fun RemoteScreen(
                 render = render,
                 mode = mode,
                 sending = composerSending,
-                modelOptions = modelOptions,
-                model = model,
-                initialModel = initialModel,
-                modelExplicitlyCleared = modelExplicitlyCleared,
-                effort = effort,
-                permissionMode = permissionMode,
+                canInterrupt = !sending,
+                hostOnline = current.online,
                 showQuickKeys = showQuickKeys,
-                onToggleQuickKeys = { showQuickKeys = !showQuickKeys },
-                onOpenSettingsSheet = { showSettingsSheet = true },
                 queuedPrompt = queuedPrompt,
                 onEditQueue = { currentQueue ->
-                    draft =
-                        if (draft.isBlank()) currentQueue.text
-                        else "${currentQueue.text}\n\n$draft"
-                    attachments =
-                        (currentQueue.attachments + attachments)
-                            .take(AttachmentReader.MAX_ATTACHMENTS)
+                    draft = if (draft.isBlank()) currentQueue.text else "${currentQueue.text}\n\n$draft"
+                    val merged = mergeAttachmentsWithinBudget(currentQueue.attachments, attachments)
+                    attachments = merged.attachments
+                    if (merged.droppedCount > 0) {
+                        attachmentNotice = "有 ${merged.droppedCount} 个附件超出总大小或数量上限，未合并"
+                    }
                     controller.setQueuedPromptFor(sessionKey, null)
                 },
                 onCancelQueue = { controller.setQueuedPromptFor(sessionKey, null) },
@@ -747,9 +733,13 @@ internal fun RemoteScreen(
                 attachmentNotice = attachmentNotice,
                 draft = draft,
                 onDraftChange = { draft = it },
+                effort = effort,
+                onEffortChange = { effort = it },
                 onSend = { dispatchPromptPayload(draft, attachments, clearComposer = true, acquireControl = canTakeControl) },
                 onQueue = { queueCurrentDraft() },
                 onAttach = { attachPicked(it) },
+                onAttachmentError = { attachmentNotice = it },
+                onInterrupt = { manualInterruptPending = true; send(JSONObject().put("action", "interrupt")) },
                 onKey = { key ->
                     when (key) {
                         "Esc" -> draft = ""

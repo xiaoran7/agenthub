@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -137,12 +136,11 @@ fun AttachmentChips(
         contentPadding = PaddingValues(horizontal = OrcaSpace.lg),
         horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
     ) {
-        itemsIndexed(attachments, key = { index, _ -> index }) { _, attachment ->
+        items(attachments, key = { it.id }) { attachment ->
             val thumbnailState =
         androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
             initialValue = null,
-            attachment.name,
-            attachment.data.length,
+            attachment.id,
         ) {
             value =
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -220,11 +218,18 @@ fun OrcaAttachIcon(
             val stroke = 1.6.dp.toPx()
             val path =
                 Path().apply {
-                    moveTo(w * 0.24f, h * 0.78f)
-                    lineTo(w * 0.24f, h * 0.34f)
-                    cubicTo(w * 0.24f, h * 0.16f, w * 0.34f, h * 0.10f, w * 0.50f, h * 0.10f)
-                    cubicTo(w * 0.66f, h * 0.10f, w * 0.76f, h * 0.16f, w * 0.76f, h * 0.34f)
-                    lineTo(w * 0.76f, h * 0.62f)
+                    // Clean slanted paperclip (matches Lucide Paperclip silhouette)
+                    moveTo(w * 0.84f, h * 0.44f)
+                    lineTo(w * 0.46f, h * 0.82f)
+                    cubicTo(w * 0.34f, h * 0.94f, w * 0.16f, h * 0.94f, w * 0.08f, h * 0.82f)
+                    cubicTo(w * 0.02f, h * 0.72f, w * 0.04f, h * 0.57f, w * 0.14f, h * 0.47f)
+                    lineTo(w * 0.56f, h * 0.08f)
+                    cubicTo(w * 0.65f, h * 0.00f, w * 0.78f, h * 0.02f, w * 0.84f, h * 0.11f)
+                    cubicTo(w * 0.90f, h * 0.20f, w * 0.88f, h * 0.32f, w * 0.80f, h * 0.40f)
+                    lineTo(w * 0.42f, h * 0.76f)
+                    cubicTo(w * 0.36f, h * 0.81f, w * 0.27f, h * 0.80f, w * 0.23f, h * 0.74f)
+                    cubicTo(w * 0.19f, h * 0.68f, w * 0.21f, h * 0.59f, w * 0.27f, h * 0.54f)
+                    lineTo(w * 0.62f, h * 0.21f)
                 }
             drawPath(
                 path,

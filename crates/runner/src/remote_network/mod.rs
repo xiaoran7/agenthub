@@ -34,6 +34,8 @@ pub(crate) use connection::*;
 
 pub(crate) mod network_loop;
 pub(crate) use network_loop::*;
+mod outbound_lanes;
+use outbound_lanes::*;
 mod plugin_commands;
 use plugin_commands::*;
 mod network_events;

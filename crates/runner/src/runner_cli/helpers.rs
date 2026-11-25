@@ -120,11 +120,8 @@ pub fn normalize(
     })
 }
 
-pub fn resolve_bound_gateway_server() -> Option<String> {
-    let home_dir = env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)?;
-    let binding_path = home_dir.join(".agenthub").join("binding.json");
+pub fn resolve_bound_gateway_server(identity_path: &std::path::Path) -> Option<String> {
+    let binding_path = agenthub_runner::device_name::binding_path_for_identity(identity_path);
     if !binding_path.exists() {
         return None;
     }
@@ -146,23 +143,64 @@ pub fn resolve_bound_gateway_server() -> Option<String> {
 }
 
 pub fn resolve_or_create_default_identity() -> DeviceIdentity {
-    let identity_path = default_identity_path();
+    resolve_or_create_identity_at(&default_identity_path())
+}
+
+pub fn resolve_or_create_identity_at(identity_path: &std::path::Path) -> DeviceIdentity {
     let agenthub_dir = identity_path
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
     if identity_path.exists() {
-        if let Ok(identity) = DeviceIdentity::load(&identity_path) {
-            return identity;
+        match DeviceIdentity::load(identity_path) {
+            Ok(identity) => return identity,
+            Err(err) => {
+                eprintln!(
+                    "[Runner] Device identity at {} is unreadable or corrupt ({err}); backing up and regenerating persisted identity",
+                    identity_path.display()
+                );
+                let identity = DeviceIdentity::generate();
+                if let Err(dir_err) = fs::create_dir_all(&agenthub_dir) {
+                    eprintln!(
+                        "[Runner] Failed to create identity directory {}: {dir_err}",
+                        agenthub_dir.display()
+                    );
+                } else if let Err(save_err) = identity.overwrite(identity_path) {
+                    eprintln!(
+                        "[Runner] Failed to persist regenerated device identity at {}: {save_err}",
+                        identity_path.display()
+                    );
+                }
+                return identity;
+            }
         }
     }
 
     let identity = DeviceIdentity::generate();
-    if fs::create_dir_all(&agenthub_dir).is_ok() {
-        let _ = identity.save_new(&identity_path);
+    if let Err(dir_err) = fs::create_dir_all(&agenthub_dir) {
+        eprintln!(
+            "[Runner] Failed to create identity directory {}: {dir_err}",
+            agenthub_dir.display()
+        );
+        return identity;
     }
-    identity
+    match identity.save_new(identity_path) {
+        Ok(()) => identity,
+        Err(agenthub_runner::device::DeviceIdentityError::Io(ref err))
+            if err.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            DeviceIdentity::load(identity_path).unwrap_or(identity)
+        }
+        Err(err) => {
+            eprintln!(
+                "[Runner] Failed to persist new device identity at {}: {err}",
+                identity_path.display()
+            );
+            identity
+        }
+    }
 }
 
 /// The identity file the Runner uses when no path is given on the command line.
@@ -186,22 +224,29 @@ pub fn resolve_default_db_path() -> PathBuf {
     // 平滑迁移与自动清理：如果当前工作目录存在历史遗留的 agenthub.db，且 ~/.agenthub/ 下尚无数据库
     // 则完整将本地的 db 及 wal/shm 复制到 ~/.agenthub/ 并安全清除本地文件，保证桌面绝对干净
     let local_db = PathBuf::from("agenthub.db");
-    if local_db.is_file() {
-        if !target_db.exists() {
-            if fs::copy(&local_db, &target_db).is_ok() {
-                let _ = fs::remove_file(&local_db);
-                let local_wal = PathBuf::from("agenthub.db-wal");
-                let target_wal = agenthub_dir.join("agenthub.db-wal");
-                if local_wal.is_file() {
-                    let _ = fs::copy(&local_wal, &target_wal);
-                    let _ = fs::remove_file(&local_wal);
-                }
-                let local_shm = PathBuf::from("agenthub.db-shm");
-                let target_shm = agenthub_dir.join("agenthub.db-shm");
-                if local_shm.is_file() {
-                    let _ = fs::copy(&local_shm, &target_shm);
-                    let _ = fs::remove_file(&local_shm);
-                }
+    if local_db.is_file() && !target_db.exists() {
+        let local_wal = PathBuf::from("agenthub.db-wal");
+        let target_wal = agenthub_dir.join("agenthub.db-wal");
+        let local_shm = PathBuf::from("agenthub.db-shm");
+        let target_shm = agenthub_dir.join("agenthub.db-shm");
+        let has_wal = local_wal.is_file();
+        let has_shm = local_shm.is_file();
+        let wal_copied = !has_wal || fs::copy(&local_wal, &target_wal).is_ok();
+        let shm_copied = !has_shm || fs::copy(&local_shm, &target_shm).is_ok();
+        if wal_copied && shm_copied && fs::copy(&local_db, &target_db).is_ok() {
+            let _ = fs::remove_file(&local_db);
+            if has_wal {
+                let _ = fs::remove_file(&local_wal);
+            }
+            if has_shm {
+                let _ = fs::remove_file(&local_shm);
+            }
+        } else {
+            if has_wal {
+                let _ = fs::remove_file(&target_wal);
+            }
+            if has_shm {
+                let _ = fs::remove_file(&target_shm);
             }
         }
     }
@@ -314,5 +359,31 @@ pub fn collect_once_observations(
             }
             Ok(observations)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_identity_file_is_backed_up_and_persisted_instead_of_ephemeral() {
+        let dir = tempfile::tempdir().unwrap();
+        let id_path = dir.path().join("identity.json");
+        fs::write(&id_path, "{corrupt json").unwrap();
+
+        let first = resolve_or_create_identity_at(&id_path);
+        let second = resolve_or_create_identity_at(&id_path);
+        assert_eq!(
+            first.device_id(),
+            second.device_id(),
+            "regenerated identity must be persisted across restarts"
+        );
+        let backups = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".revoked-"))
+            .count();
+        assert_eq!(backups, 1, "corrupt identity must be backed up");
     }
 }

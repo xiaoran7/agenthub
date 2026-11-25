@@ -34,4 +34,4 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Contact
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leadership at `tangwg089@gmail.com`. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported privately to the project maintainer (Tanner) via [GitHub Security Advisories](https://github.com/xiaoran7/agenthub/security/advisories/new) or repository moderation channels. All complaints will be reviewed and investigated promptly and fairly.

@@ -141,6 +141,20 @@ impl AntigravityProcessSession {
         let program = binary_path.display().to_string();
         let cwd_path = cwd.as_ref().to_path_buf();
 
+        let validated_resume_id = match resume_session_id.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(id) => {
+                if !super::super::validate_safe_session_id(id) {
+                    return Err(CollectorError::Protocol {
+                        program,
+                        code: "invalid_session_id".to_owned(),
+                        message: "resume session id contains disallowed characters".to_owned(),
+                    });
+                }
+                Some(id)
+            }
+            None => None,
+        };
+
         let mut command = super::super::command_for_binary(binary_path);
         command.current_dir(&cwd_path);
 
@@ -153,12 +167,12 @@ impl AntigravityProcessSession {
             gateway.inject_into_command_with_session(
                 &mut command,
                 &mut effective_model,
-                resume_session_id,
+                validated_resume_id,
             );
         }
 
         let base_args = build_antigravity_stream_args(
-            resume_session_id,
+            validated_resume_id,
             effective_model.as_deref(),
             options.permission_mode,
         );
@@ -173,16 +187,17 @@ impl AntigravityProcessSession {
             program: program.clone(),
             source,
         })?;
-        let job = ChildJob::attach(&child).map_err(|source| {
+        let mut job = Some(ChildJob::attach(&child).map_err(|source| {
             let _ = child.kill();
             let _ = child.wait();
             CollectorError::Io {
                 program: program.clone(),
                 source,
             }
-        })?;
+        })?);
 
         let (stdin, stdout, stderr) = take_child_stdio(&mut child, &program).inspect_err(|_| {
+            drop(job.take());
             let _ = child.kill();
             let _ = child.wait();
         })?;
@@ -243,8 +258,8 @@ impl AntigravityProcessSession {
             _reader: Some(reader),
             _stderr_reader: Some(stderr_reader),
             stderr_buf,
-            job: Some(job),
-            session_id: resume_session_id.unwrap_or_default().to_string(),
+            job,
+            session_id: validated_resume_id.unwrap_or_default().to_string(),
             cwd: cwd_path,
             model: effective_model,
             requested_model: options.model.map(str::to_string),
@@ -502,16 +517,17 @@ impl AntigravityProcessSession {
 
     pub fn interrupt(&mut self) -> Result<(), CollectorError> {
         self.interrupted = true;
+        drop(self.job.take());
         let _ = self.child.kill();
-        let _ = self.job.take();
+        let _ = self.child.wait();
         Ok(())
     }
 }
 
 impl Drop for AntigravityProcessSession {
     fn drop(&mut self) {
+        drop(self.job.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = self.job.take();
     }
 }

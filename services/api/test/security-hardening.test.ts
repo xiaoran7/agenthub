@@ -618,21 +618,21 @@ test("team members cannot bind/revoke devices, toggle plugins, or escalate permi
   await app.close();
 });
 
-test("trustProxy defaults to loopback and accepts an explicit proxy allowlist", () => {
-  assert.deepEqual(resolveTrustProxyConfig("127.0.0.1", "1"), [
+test("trustProxy defaults to loopback, honors hop counts, and prefers an explicit allowlist", () => {
+  assert.deepEqual(resolveTrustProxyConfig("127.0.0.1", undefined), [
     "127.0.0.1/8",
     "::1/128",
   ]);
-  assert.equal(resolveTrustProxyConfig("0.0.0.0", "1"), false);
+  assert.equal(resolveTrustProxyConfig("0.0.0.0", undefined), false);
+  assert.equal(resolveTrustProxyConfig("0.0.0.0", "1"), 1);
+  assert.equal(resolveTrustProxyConfig("127.0.0.1", "2"), 2);
   assert.deepEqual(
-    resolveTrustProxyConfig(
-      "0.0.0.0",
-      undefined,
-      " 192.0.2.5 , 2001:db8::/64 ",
-    ),
+    resolveTrustProxyConfig("0.0.0.0", "2", " 192.0.2.5 , 2001:db8::/64 "),
     ["192.0.2.5", "2001:db8::/64"],
   );
   assert.equal(resolveTrustProxyConfig("127.0.0.1", "0", "192.0.2.5"), false);
+  assert.throws(() => resolveTrustProxyConfig("0.0.0.0", "9"));
+  assert.throws(() => resolveTrustProxyConfig("0.0.0.0", "-1"));
 });
 
 test("enforceCookieCsrf respects Fastify trustProxy X-Forwarded-Host without accepting untrusted spoofing", async () => {

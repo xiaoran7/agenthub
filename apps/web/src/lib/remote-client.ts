@@ -1,4 +1,4 @@
-import type { DiscoveryCandidate, RemoteEvent } from "./remote";
+import type { DiscoveryCandidate, RemoteEvent } from "./remote-types";
 
 const REDACTED_PATH = "[local_path_redacted]";
 

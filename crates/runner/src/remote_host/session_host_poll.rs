@@ -32,6 +32,14 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         let now = Instant::now();
         self.recheck_codex_release(now);
         self.release_idle_control(now);
+        if let Some(home) = crate::collectors::home_dir() {
+            events.extend(self.live_mirror.poll_sessions(
+                &home,
+                &self.generation,
+                &self.sessions,
+                now,
+            ));
+        }
         Ok(events)
     }
 
@@ -40,6 +48,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         self.control_idle_since.clear();
         self.control_release_checks.clear();
         self.approvals.clear();
+        self.questions.clear();
         for binding in self.sessions.values_mut() {
             binding.control_connected = false;
             binding.execution_state = ExecutionState::Unknown;
@@ -59,6 +68,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             .cloned();
         let mut approval_id: Option<String> = None;
         let mut approval: Option<PendingApprovalSnapshot> = None;
+        let mut resolved_question_id: Option<String> = None;
         let mut question: Option<PendingQuestionSnapshot> = None;
         let mut kind = method.to_string();
         if let Some(binding) = hub_id.as_ref().and_then(|id| self.sessions.get_mut(id)) {
@@ -106,6 +116,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         });
                         self.questions
                             .retain(|_, q| q.hub_session_id != binding.hub_session_id);
+                        self.live_mirror
+                            .defer_after_local_turn(&binding.hub_session_id, Instant::now());
                     }
                     if let Some(real_id) = params.get("realSessionId").and_then(Value::as_str) {
                         let real_id = real_id.trim();
@@ -133,6 +145,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                             .then(|| id.clone())
                     }) {
                         self.questions.remove(&id);
+                        resolved_question_id = Some(id);
                         kind = "question_resolved".into();
                     }
                 }
@@ -253,11 +266,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     });
                                 let command_preview = params["command"].as_str().map(str::to_owned);
                                 let path = params["filePath"].as_str().map(str::to_owned);
-                                let diff = params["diff"].as_str().map(|d| {
-                                    let mut sanitized = crate::privacy::redact_paths_inside_text(d);
-                                    crate::collectors::truncate_utf8_bytes(&mut sanitized, 65536);
-                                    sanitized
-                                });
+                                let diff = params["diff"]
+                                    .as_str()
+                                    .map(|d| sanitize_approval_diff(d, 65_536));
                                 let description = params["reason"].as_str().map(str::to_owned);
                                 let risk_level = if is_command_approval {
                                     Some("high".to_string())
@@ -317,7 +328,10 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 _ => {}
             }
         }
-        let question_id = question.as_ref().map(|q| q.question_id.clone());
+        let question_id = question
+            .as_ref()
+            .map(|q| q.question_id.clone())
+            .or(resolved_question_id);
         let binding = hub_id
             .as_ref()
             .and_then(|id| self.sessions.get(id))
@@ -342,6 +356,81 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     }
 }
 
+fn redact_json_strings_recursive(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            *s = crate::privacy::redact_paths_inside_text(s);
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_json_strings_recursive(item);
+            }
+        }
+        Value::Object(map) => {
+            for val in map.values_mut() {
+                redact_json_strings_recursive(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn shrink_longest_json_string(value: &mut Value, excess: usize) -> bool {
+    fn find_longest_len(value: &Value) -> usize {
+        match value {
+            Value::String(s) => s.len(),
+            Value::Array(items) => items.iter().map(find_longest_len).max().unwrap_or(0),
+            Value::Object(map) => map.values().map(find_longest_len).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+    fn shrink_matching(value: &mut Value, target_len: usize, excess: usize) -> bool {
+        match value {
+            Value::String(s) if s.len() == target_len && !s.is_empty() => {
+                let shrink = (excess / 2).max(1).min(s.len());
+                let next_len = s.len().saturating_sub(shrink);
+                crate::collectors::truncate_utf8_bytes(s, next_len);
+                true
+            }
+            Value::Array(items) => items
+                .iter_mut()
+                .any(|item| shrink_matching(item, target_len, excess)),
+            Value::Object(map) => map
+                .values_mut()
+                .any(|val| shrink_matching(val, target_len, excess)),
+            _ => false,
+        }
+    }
+    let longest = find_longest_len(value);
+    longest > 0 && shrink_matching(value, longest, excess)
+}
+
+pub(crate) fn sanitize_approval_diff(raw: &str, max_bytes: usize) -> String {
+    if let Ok(mut parsed) = serde_json::from_str::<Value>(raw)
+        && parsed.is_object()
+    {
+        redact_json_strings_recursive(&mut parsed);
+        for _ in 0..24 {
+            let encoded = parsed.to_string();
+            if encoded.len() <= max_bytes {
+                return encoded;
+            }
+            let excess = encoded.len() - max_bytes;
+            if !shrink_longest_json_string(&mut parsed, excess) {
+                break;
+            }
+        }
+        let encoded = parsed.to_string();
+        if encoded.len() <= max_bytes {
+            return encoded;
+        }
+        return "{}".to_string();
+    }
+    let mut sanitized = crate::privacy::redact_paths_inside_text(raw);
+    crate::collectors::truncate_utf8_bytes(&mut sanitized, max_bytes);
+    sanitized
+}
+
 fn is_ephemeral_provider_noise(kind: &str) -> bool {
     matches!(
         kind,
@@ -362,6 +451,31 @@ fn is_ephemeral_provider_noise(kind: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::is_ephemeral_provider_noise;
+
+    #[test]
+    fn json_approval_diff_redacts_nested_paths_and_stays_valid_json_within_budget() {
+        let big = format!("see /Users/alice/secret/app.rs {}", "\"".repeat(24_000));
+        let raw_json = serde_json::json!({
+            "old_string": big,
+            "new_string": "updated C:\\Users\\bob\\repo\\main.rs"
+        })
+        .to_string();
+        let sanitized = super::sanitize_approval_diff(&raw_json, 65_536);
+        assert!(
+            sanitized.len() <= 65_536,
+            "sanitized json diff exceeded 65536 bytes: {}",
+            sanitized.len()
+        );
+        let reparsed: serde_json::Value =
+            serde_json::from_str(&sanitized).expect("json diff must stay valid JSON");
+        assert!(
+            !reparsed["old_string"]
+                .as_str()
+                .unwrap()
+                .contains("/Users/alice/secret")
+        );
+        assert!(!reparsed["new_string"].as_str().unwrap().contains("bob"));
+    }
 
     #[test]
     fn ephemeral_provider_noise_matches_known_housekeeping_notifications() {

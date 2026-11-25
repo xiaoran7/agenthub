@@ -145,12 +145,25 @@ pub fn subscribe() -> Subscription {
 /// happen, which is the behaviour this module exists to remove. The thread
 /// only asks for a pass; the pass itself (filesystem and SQLite work) still
 /// runs on the scanner's own thread.
-pub fn start(stop: Arc<AtomicBool>) {
+pub fn start<F>(stop: Arc<AtomicBool>, on_tick: F)
+where
+    F: Fn() + Send + 'static,
+{
+    start_with_on_stop(stop, on_tick, || {});
+}
+
+pub fn start_with_on_stop<F, S>(stop: Arc<AtomicBool>, on_tick: F, on_stop: S)
+where
+    F: Fn() + Send + 'static,
+    S: FnOnce() + Send + 'static,
+{
     let _ = thread::Builder::new()
         .name("agenthub-live-tick".into())
         .spawn(move || {
             let b = bus();
-            let mut last = Instant::now() - TICK_ACTIVE;
+            let mut last = Instant::now()
+                .checked_sub(TICK_ACTIVE)
+                .unwrap_or_else(Instant::now);
             let mut last_ver = version();
             let mut last_activity = b.activity_seq.load(Ordering::Relaxed);
             let mut last_plugin_gen = crate::plugins::state_generation();
@@ -167,12 +180,11 @@ pub fn start(stop: Arc<AtomicBool>) {
                 let current_plugin_gen = crate::plugins::state_generation();
                 if current_plugin_gen != last_plugin_gen {
                     last_plugin_gen = current_plugin_gen;
-                    crate::web_server::invalidate_dashboard_summary_cache();
                     publish();
                 }
                 if last.elapsed() >= interval {
                     last = Instant::now();
-                    crate::remote_host::wake_scan();
+                    on_tick();
                     let now_ver = version();
                     let now_activity = b.activity_seq.load(Ordering::Relaxed);
                     if now_ver != last_ver || now_activity != last_activity {
@@ -186,6 +198,7 @@ pub fn start(stop: Arc<AtomicBool>) {
                 }
                 thread::sleep(Duration::from_millis(100));
             }
+            on_stop();
         });
 }
 

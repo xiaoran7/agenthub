@@ -4,7 +4,10 @@
 //! console shows this name instead, so the sidebar reads like a list of
 //! computers rather than a list of identifiers.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -96,16 +99,13 @@ fn system_hostname() -> Option<String> {
 
 #[cfg(unix)]
 fn system_hostname() -> Option<String> {
-    // `uname -n` is the portable POSIX answer; libc's gethostname is not
-    // available in the unix dependency set of this crate.
-    let output = std::process::Command::new("uname")
-        .arg("-n")
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let mut buf = [0u8; 256];
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast::<libc::c_char>(), buf.len()) };
+    if rc != 0 {
         return None;
     }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..len]).trim().to_owned();
     if name.is_empty() { None } else { Some(name) }
 }
 
@@ -161,6 +161,17 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The gateway binding file stored beside `identity_path`.
+pub fn binding_path_for_identity(identity_path: &Path) -> PathBuf {
+    identity_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|h| h.join(".agenthub")))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("binding.json")
+}
+
 /// The configuration file that holds the user-chosen name.
 ///
 /// It lives next to the identity file so a machine's identity and its label
@@ -170,6 +181,70 @@ fn config_path(identity_path: &Path) -> std::path::PathBuf {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("device.json")
+}
+
+pub(crate) fn executable_cache()
+-> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub(crate) fn find_executable(name: &str, relative_hints: &[&str]) -> (bool, Option<String>) {
+    if let Ok(guard) = executable_cache().read() {
+        if let Some((cached_at, res)) = guard.get(name) {
+            if cached_at.elapsed() < Duration::from_secs(30) {
+                return res.clone();
+            }
+        }
+    }
+
+    let mut found = (false, None);
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let home_path = PathBuf::from(home);
+        for hint in relative_hints {
+            let full = home_path.join(hint);
+            if full.exists() {
+                found = (true, Some(full.to_string_lossy().to_string()));
+                break;
+            }
+        }
+    }
+
+    if !found.0
+        && let Some(path_var) = std::env::var_os("PATH")
+        && let Some(resolved) = find_executable_in_paths(name, std::env::split_paths(&path_var))
+    {
+        found = (true, Some(resolved));
+    }
+
+    if let Ok(mut guard) = executable_cache().write() {
+        guard.insert(name.to_string(), (Instant::now(), found.clone()));
+    }
+    found
+}
+
+fn find_executable_in_paths(
+    name: &str,
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    let exts = [".cmd", ".exe", ".bat", ""];
+    #[cfg(not(target_os = "windows"))]
+    let exts = [""];
+
+    for p in paths {
+        if !p.is_absolute() {
+            continue;
+        }
+        for ext in &exts {
+            let candidate = p.join(format!("{}{}", name, ext));
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -243,5 +318,26 @@ mod tests {
         write_configured_name(&identity, "书房主机").unwrap();
         assert_ne!(source.resolve(), before);
         assert_eq!(source.resolve().as_str(), "书房主机");
+    }
+
+    #[test]
+    fn find_executable_in_paths_skips_relative_path_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let abs_bin = dir.path().join("demo-tool");
+        std::fs::write(&abs_bin, b"ok").unwrap();
+        assert_eq!(
+            find_executable_in_paths(
+                "demo-tool",
+                vec![PathBuf::from("."), PathBuf::from("rel/bin")]
+            ),
+            None
+        );
+        assert_eq!(
+            find_executable_in_paths(
+                "demo-tool",
+                vec![PathBuf::from("."), dir.path().to_path_buf()]
+            ),
+            Some(abs_bin.to_string_lossy().to_string())
+        );
     }
 }

@@ -31,7 +31,9 @@ pub(crate) struct BoundedMessageUsage {
 impl BoundedMessageUsage {
     pub(crate) fn record(&mut self, key: String, figures: (u64, u64, u64)) {
         if let Some((_, existing)) = self.recent.iter_mut().rev().find(|(k, _)| *k == key) {
-            *existing = figures;
+            if figures != (0, 0, 0) || *existing == (0, 0, 0) {
+                *existing = figures;
+            }
             return;
         }
         self.request_count = self.request_count.saturating_add(1);
@@ -626,7 +628,6 @@ pub(crate) fn read_claude_transcript_metadata_incremental(
             state.model = Some(mid);
         }
         if record.record_type.as_deref() == Some("assistant") {
-            state.has_output = true;
             let message_id = record
                 .message
                 .as_ref()

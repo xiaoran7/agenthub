@@ -49,20 +49,45 @@ pub(crate) fn handle_network_event_inner<T: NativeTransport>(
         NetworkEvent::Connected(epoch, server_seq, server_command_seq)
             if epoch >> 32 == current_remote_generation =>
         {
+            if server_seq < 0 || server_command_seq.is_some_and(|seq| seq < 0) {
+                reject_remote_epoch(control, active, epoch, "negative handshake seq");
+                return Ok(());
+            }
             let (sent, acked) = durable.journal.watermarks()?;
             if server_seq < acked {
                 eprintln!(
                     "[Runner] Server sequence rewound: server_seq {server_seq} < acked {acked}. Resetting outbox stream to re-sync."
                 );
-                durable.journal.reset_watermarks_and_outbox(server_seq)?;
+                match durable.journal.reset_watermarks_and_outbox(server_seq) {
+                    Ok(()) => {}
+                    Err(crate::remote_journal::JournalError::InvalidAck) => {
+                        reject_remote_epoch(control, active, epoch, "invalid server seq reset");
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
                 // An older Gateway does not report its command watermark, and
                 // guessing zero would discard replay protection for commands it
                 // still holds; the journal is then left as it is.
                 if let Some(server_command_seq) = server_command_seq {
-                    durable
+                    match durable
                         .journal
-                        .reset_inbound_command_seq(server_command_seq)?;
-                    command_seq.store(server_command_seq, Ordering::Release);
+                        .reset_inbound_command_seq(server_command_seq)
+                    {
+                        Ok(()) => {
+                            command_seq.store(server_command_seq, Ordering::Release);
+                        }
+                        Err(crate::remote_journal::JournalError::InvalidAck) => {
+                            reject_remote_epoch(
+                                control,
+                                active,
+                                epoch,
+                                "invalid server command seq reset",
+                            );
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
                 let ready_payload =
                     remote_ready_payload(durable, cached_models, cached_discovery, device_name);
@@ -87,8 +112,18 @@ pub(crate) fn handle_network_event_inner<T: NativeTransport>(
                     command_seq.store(server_command_seq, Ordering::Release);
                 }
                 if server_seq > sent {
-                    for s in (sent + 1)..=server_seq {
-                        let _ = durable.journal.mark_sent(s);
+                    match durable.journal.reconcile_sent_through(server_seq) {
+                        Ok(()) => {}
+                        Err(crate::remote_journal::JournalError::InvalidAck) => {
+                            reject_remote_epoch(
+                                control,
+                                active,
+                                epoch,
+                                "journal reconcile invalid",
+                            );
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
                 match durable.journal.acknowledge(server_seq) {
@@ -109,7 +144,17 @@ pub(crate) fn handle_network_event_inner<T: NativeTransport>(
             eprintln!("{{\"code\":\"remote_connected\"}}");
         }
         NetworkEvent::Sent(epoch, seq) if *active == Some(epoch) => {
-            durable.journal.mark_sent(seq)?
+            match durable.journal.mark_sent_through(seq) {
+                Ok(()) => {}
+                Err(crate::remote_journal::JournalError::InvalidAck) => {
+                    reject_remote_epoch(control, active, epoch, "journal sent seq invalid");
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        NetworkEvent::ResetInboundCommandSeq(epoch) if epoch >> 32 == current_remote_generation => {
+            durable.journal.reset_inbound_command_seq(0)?;
+            command_seq.store(0, Ordering::Release);
         }
         NetworkEvent::Offline(epoch) if *active == Some(epoch) => {
             *active = None;
@@ -123,12 +168,6 @@ pub(crate) fn handle_network_event_inner<T: NativeTransport>(
                         reject_remote_epoch(control, active, epoch, "ack missing seq");
                         return Ok(());
                     };
-                    let (sent, _) = durable.journal.watermarks()?;
-                    if seq > sent {
-                        for s in (sent + 1)..=seq {
-                            let _ = durable.journal.mark_sent(s);
-                        }
-                    }
                     match durable.journal.acknowledge(seq) {
                         Ok(()) => {}
                         Err(crate::remote_journal::JournalError::InvalidAck) => {

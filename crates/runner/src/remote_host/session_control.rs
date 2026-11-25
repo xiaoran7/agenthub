@@ -2,6 +2,8 @@ use super::*;
 
 const BORROWED_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 const RELEASE_RECHECK_DELAY: Duration = Duration::from_secs(5);
+const MAX_RELEASE_RECHECKS: u8 = 15;
+const MAX_RELEASE_RECHECK_DURATION: Duration = Duration::from_secs(30);
 
 pub(super) fn is_codex_thread_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok()
@@ -56,11 +58,11 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     }
 
     pub(super) fn recheck_codex_release(&mut self, now: Instant) {
-        let Some(id) = self
+        let Some((id, attempts, started_at)) = self
             .control_release_checks
             .iter()
-            .find(|(_, due)| **due <= now)
-            .map(|(id, _)| id.clone())
+            .find(|(_, (due, _, _))| *due <= now)
+            .map(|(id, (_, attempts, started_at))| (id.clone(), *attempts, *started_at))
         else {
             return;
         };
@@ -72,9 +74,24 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             Ok(ExecutionState::Unknown) => {
                 self.record_codex_release(&id, ExecutionState::Unknown, now);
             }
+            Err(ref error)
+                if matches!(
+                    error.code.as_str(),
+                    "provider_not_available" | "codex_provider_lost"
+                ) =>
+            {
+                self.record_codex_release(&id, ExecutionState::Unknown, now);
+            }
             _ => {
-                self.control_release_checks
-                    .insert(id, now + RELEASE_RECHECK_DELAY);
+                let next_attempts = attempts.saturating_add(1);
+                if next_attempts >= MAX_RELEASE_RECHECKS
+                    || now.saturating_duration_since(started_at) >= MAX_RELEASE_RECHECK_DURATION
+                {
+                    self.record_codex_release(&id, ExecutionState::Unknown, now);
+                } else {
+                    self.control_release_checks
+                        .insert(id, (now + RELEASE_RECHECK_DELAY, next_attempts, started_at));
+                }
             }
         }
     }
@@ -105,7 +122,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         self.control_idle_since.remove(id);
         if state == ExecutionState::ReleasingControl {
             self.control_release_checks
-                .insert(id.into(), now + RELEASE_RECHECK_DELAY);
+                .insert(id.into(), (now + RELEASE_RECHECK_DELAY, 0, now));
         } else {
             self.control_release_checks.remove(id);
         }
@@ -277,5 +294,72 @@ mod tests {
             ExecutionState::Unknown
         );
         assert!(host.control_release_checks.is_empty());
+    }
+
+    #[test]
+    fn recheck_codex_release_converges_on_provider_not_available_and_retry_cap() {
+        struct UnavailableTransport;
+        impl NativeTransport for UnavailableTransport {
+            fn request(&mut self, _method: &str, _params: Value) -> Result<Value, NativeError> {
+                Err(NativeError::rejected("provider_not_available"))
+            }
+            fn respond(&mut self, _: Value, _: Value) -> Result<(), NativeError> {
+                unreachable!()
+            }
+            fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut host =
+            NativeSessionHost::new(UnavailableTransport, vec![dir.path().to_owned()]).unwrap();
+        let now = Instant::now();
+        host.sessions.insert(
+            "hub".into(),
+            SessionBinding {
+                hub_session_id: "hub".into(),
+                provider_session_id: uuid::Uuid::new_v4().to_string(),
+                workspace_path: dir.path().to_owned(),
+                host_generation: host.generation().to_owned(),
+                control_connected: false,
+                execution_state: ExecutionState::ReleasingControl,
+                current_turn_id: None,
+            },
+        );
+        host.control_release_checks
+            .insert("hub".into(), (now, 0, now));
+        host.recheck_codex_release(now);
+        assert_eq!(
+            host.sessions["hub"].execution_state,
+            ExecutionState::Unknown
+        );
+        assert!(host.control_release_checks.is_empty());
+
+        // Also converge when retries hit MAX_RELEASE_RECHECK_DURATION.
+        let mut stuck_host =
+            NativeSessionHost::new(ReleaseTransport::default(), vec![dir.path().to_owned()])
+                .unwrap();
+        stuck_host.sessions.insert(
+            "hub".into(),
+            SessionBinding {
+                hub_session_id: "hub".into(),
+                provider_session_id: uuid::Uuid::new_v4().to_string(),
+                workspace_path: dir.path().to_owned(),
+                host_generation: stuck_host.generation().to_owned(),
+                control_connected: false,
+                execution_state: ExecutionState::ReleasingControl,
+                current_turn_id: None,
+            },
+        );
+        stuck_host
+            .control_release_checks
+            .insert("hub".into(), (now, 0, now));
+        stuck_host.recheck_codex_release(now + MAX_RELEASE_RECHECK_DURATION);
+        assert_eq!(
+            stuck_host.sessions["hub"].execution_state,
+            ExecutionState::Unknown
+        );
+        assert!(stuck_host.control_release_checks.is_empty());
     }
 }

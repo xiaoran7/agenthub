@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.8.1-0284c7.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.8.9-0284c7.svg?style=flat-square" alt="Version" /></a>
   <a href="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/CI-passing-10b981.svg?style=flat-square" alt="CI Status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b.svg?style=flat-square" alt="License" /></a>
   <a href="llms.txt"><img src="https://img.shields.io/badge/llms.txt-standardized-8b5cf6.svg?style=flat-square" alt="llms.txt" /></a>

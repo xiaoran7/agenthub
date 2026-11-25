@@ -371,6 +371,9 @@ export function Select({
         }
         break;
       case "Enter":
+        if (event.nativeEvent.isComposing || event.keyCode === 229) {
+          break;
+        }
         event.preventDefault();
         if (activeIndex >= 0) {
           commit(activeIndex);

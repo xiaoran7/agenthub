@@ -11,11 +11,11 @@ use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
-    IMAGE_ICON, KillTimer, LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MSG, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON,
-    SetTimer, TranslateMessage, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
+    GetSystemMetrics, IMAGE_ICON, KillTimer, LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MSG,
+    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SM_CXICON, SM_CXSMICON, SM_CYICON,
+    SM_CYSMICON, SetTimer, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW,
 };
 
 pub use super::desktop_window::{
@@ -35,7 +35,7 @@ pub(crate) static TRAY_STATE: OnceLock<TrayState> = OnceLock::new();
 
 pub(crate) struct TrayState {
     pub(crate) web_url: Mutex<String>,
-    pub(crate) running: Arc<AtomicBool>,
+    pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_child: Mutex<Option<std::process::Child>>,
 }
 
@@ -105,10 +105,10 @@ pub fn enable_per_monitor_dpi_awareness() {
     }
 }
 
-pub fn start_tray(web_url: String, running: Arc<AtomicBool>) {
+pub fn start_tray(web_url: String, stopped: Arc<AtomicBool>) {
     let _ = TRAY_STATE.set(TrayState {
         web_url: Mutex::new(web_url.clone()),
-        running,
+        stopped,
         active_child: Mutex::new(None),
     });
 
@@ -274,7 +274,8 @@ unsafe extern "system" fn tray_wnd_proc(
                     {
                         let mut cursor: POINT = std::mem::zeroed();
                         GetCursorPos(&mut cursor);
-                        let mut anchor_guard = HOVER_ANCHOR.lock().unwrap();
+                        let mut anchor_guard =
+                            HOVER_ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
                         if anchor_guard.is_none() {
                             *anchor_guard = Some(cursor);
                             SetTimer(hwnd, TIMER_HOVER_DWELL, 65, None);
@@ -299,7 +300,7 @@ unsafe extern "system" fn tray_wnd_proc(
                 if wparam == TIMER_HOVER_DWELL {
                     KillTimer(hwnd, TIMER_HOVER_DWELL);
                     let anchor = {
-                        let mut guard = HOVER_ANCHOR.lock().unwrap();
+                        let mut guard = HOVER_ANCHOR.lock().unwrap_or_else(|e| e.into_inner());
                         guard.take()
                     };
                     if let Some(anchor) = anchor {
@@ -316,6 +317,11 @@ unsafe extern "system" fn tray_wnd_proc(
                         }
                     }
                 }
+                0
+            }
+            WM_CLOSE => {
+                remove_tray_icon(hwnd);
+                let _ = DestroyWindow(hwnd);
                 0
             }
             WM_DESTROY => {
@@ -353,9 +359,12 @@ fn tray_choice(id: usize) {
         crate::tray_menu::ACTION_EXIT => {
             cleanup_desktop_window();
             if let Some(state) = TRAY_STATE.get() {
-                state.running.store(false, Ordering::SeqCst);
+                state.stopped.store(true, Ordering::SeqCst);
             }
-            std::process::exit(0);
+            thread::spawn(|| {
+                thread::sleep(std::time::Duration::from_secs(3));
+                std::process::exit(0);
+            });
         }
         _ => {}
     }

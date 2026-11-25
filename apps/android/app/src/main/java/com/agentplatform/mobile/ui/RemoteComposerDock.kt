@@ -1,11 +1,9 @@
 package com.agentplatform.mobile.ui
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -45,10 +43,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -70,6 +70,71 @@ import kotlinx.coroutines.delay
 
 internal typealias QueuedPromptDraft = com.agentplatform.mobile.data.QueuedPromptDraft
 
+internal const val MAX_ATTACHMENT_WIRE_BYTES = 9L * 1024 * 1024
+
+internal fun RemoteAttachment.estimatedWireBytes(): Long {
+    val envelope =
+        name.toByteArray(Charsets.UTF_8).size.toLong() +
+            mediaType.toByteArray(Charsets.UTF_8).size.toLong() +
+            encoding.length.toLong() +
+            96L
+    if (encoding == "base64") {
+        var extra = 0L
+        for (ch in data) if (ch == '/') extra += 1L
+        return data.length.toLong() + extra + envelope
+    }
+    var bytes = envelope
+    for (ch in data) {
+        val code = ch.code
+        bytes +=
+            when {
+                ch == '"' || ch == '\\' || ch == '/' || ch == '\b' || ch == '\u000C' || ch == '\n' || ch == '\r' || ch == '\t' -> 2L
+                code < 0x20 -> 6L
+                code < 0x80 -> 1L
+                code < 0x800 -> 2L
+                ch.isHighSurrogate() || ch.isLowSurrogate() -> 2L
+                else -> 3L
+            }
+    }
+    return bytes
+}
+
+internal data class AttachmentMergeResult(
+    val attachments: List<RemoteAttachment>,
+    val droppedCount: Int,
+)
+
+internal fun mergeAttachmentsWithinBudget(
+    existing: List<RemoteAttachment>,
+    incoming: List<RemoteAttachment>,
+    maxCount: Int = AttachmentReader.MAX_ATTACHMENTS,
+    maxDecodedBytes: Long = AttachmentReader.MAX_TOTAL_BYTES,
+    maxWireBytes: Long = MAX_ATTACHMENT_WIRE_BYTES,
+): AttachmentMergeResult {
+    val kept = ArrayList<RemoteAttachment>(minOf(existing.size + incoming.size, maxCount))
+    var decodedBytes = 0L
+    var wireBytes = 0L
+    var dropped = 0
+    fun tryAdd(att: RemoteAttachment) {
+        if (kept.size >= maxCount) {
+            dropped += 1
+            return
+        }
+        val dec = att.estimatedDecodedBytes()
+        val wire = att.estimatedWireBytes()
+        if (decodedBytes + dec > maxDecodedBytes || wireBytes + wire > maxWireBytes) {
+            dropped += 1
+            return
+        }
+        kept.add(att)
+        decodedBytes += dec
+        wireBytes += wire
+    }
+    existing.forEach(::tryAdd)
+    incoming.forEach(::tryAdd)
+    return AttachmentMergeResult(kept, dropped)
+}
+
 internal fun mergeQueuedPrompt(
     existing: QueuedPromptDraft?,
     nextText: String,
@@ -78,9 +143,11 @@ internal fun mergeQueuedPrompt(
     val trimmed = nextText.trim()
     if (trimmed.isEmpty() && nextAttachments.isEmpty()) return existing
     if (existing == null) {
+        val merged = mergeAttachmentsWithinBudget(emptyList(), nextAttachments)
+        if (trimmed.isEmpty() && merged.attachments.isEmpty()) return null
         return QueuedPromptDraft(
             text = trimmed,
-            attachments = nextAttachments.take(AttachmentReader.MAX_ATTACHMENTS),
+            attachments = merged.attachments,
             count = 1,
         )
     }
@@ -90,11 +157,12 @@ internal fun mergeQueuedPrompt(
             trimmed.isBlank() -> existing.text
             else -> "${existing.text}\n\n$trimmed"
         }
-    val mergedAttachments =
-        (existing.attachments + nextAttachments).take(AttachmentReader.MAX_ATTACHMENTS)
+    val merged = mergeAttachmentsWithinBudget(existing.attachments, nextAttachments)
+    val addedAnything = trimmed.isNotEmpty() || merged.attachments.size > existing.attachments.size
+    if (!addedAnything) return existing
     return QueuedPromptDraft(
         text = mergedText,
-        attachments = mergedAttachments,
+        attachments = merged.attachments,
         count = existing.count + 1,
     )
 }
@@ -189,150 +257,188 @@ internal fun Composer(
     hint: String,
     sending: Boolean,
     hasAttachments: Boolean,
+    effort: EffortLevel = EffortLevel.DEFAULT,
+    onEffortChange: ((EffortLevel) -> Unit)? = null,
     onSend: () -> Unit,
     onQueue: () -> Unit,
     onAttach: (List<android.net.Uri>) -> Unit,
+    onAttachmentError: (String) -> Unit = {},
+    stoppable: Boolean,
+    canInterrupt: Boolean,
+    onInterrupt: () -> Unit,
 ) {
     val canInput = mode != ComposerMode.BLOCKED && !sending
     val isQueueMode = mode == ComposerMode.BUSY
-    val hasContent = draft.isNotBlank() || hasAttachments
-    val canSubmit = canInput && hasContent
-    val picker =
-        rememberLauncherForActivityResult(
-            ActivityResultContracts.OpenMultipleDocuments(),
-        ) { picked -> onAttach(picked) }
+    val canSubmit = canInput && (draft.isNotBlank() || hasAttachments)
+    val submit = if (isQueueMode) onQueue else onSend
+    val colors = MaterialTheme.colorScheme
+    var focused by remember { mutableStateOf(false) }
+    var showAttachSheet by remember { mutableStateOf(false) }
+    var showEffortSheet by remember { mutableStateOf(false) }
+    val attachmentPicker =
+        rememberAttachmentPicker(
+            onAttach = onAttach,
+            onError = onAttachmentError,
+        )
+
+    if (showAttachSheet) {
+        AttachmentPickerSheet(
+            controller = attachmentPicker,
+            onDismiss = { showAttachSheet = false },
+        )
+    }
+
+    if (showEffortSheet && onEffortChange != null) {
+        LaunchOptionSheet(
+            title = "思考强度",
+            headerSubtitle = "下一轮发送立即生效",
+            choices =
+                EffortLevel.entries.map { item ->
+                    LaunchSheetChoice(
+                        id = item.wire,
+                        title = item.label,
+                        subtitle = effortHint(item),
+                    )
+                },
+            selectedId = effort.wire,
+            onSelect = { wire ->
+                EffortLevel.fromWire(wire)?.let(onEffortChange)
+            },
+            onDismiss = { showEffortSheet = false },
+        )
+    }
 
     Surface(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = OrcaSpace.md, vertical = 4.dp),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = OrcaSpace.md, vertical = 6.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = if (mode == ComposerMode.BLOCKED) colors.surfaceVariant else colors.surface,
+        border = BorderStroke(1.dp, if (focused && canInput) colors.primary else colors.outlineVariant),
+        shadowElevation = if (mode == ComposerMode.BLOCKED) 0.dp else 2.dp,
     ) {
         Row(
-            modifier =
-                Modifier.padding(
-                    start = OrcaSpace.md,
-                    end = 6.dp,
-                    top = 4.dp,
-                    bottom = 4.dp,
-                ),
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
-            Box(
+            IconButton(
+                onClick = { showAttachSheet = true },
+                enabled = canInput,
+                modifier = Modifier.semantics { contentDescription = "添加附件" },
+            ) {
+                OrcaPlusIcon(
+                    tint = if (canInput) colors.onSurface else colors.onSurfaceVariant.copy(alpha = 0.45f),
+                    size = 19.dp,
+                )
+            }
+            BasicTextField(
+                value = draft,
+                onValueChange = onDraftChange,
                 modifier =
                     Modifier
                         .weight(1f)
-                        .defaultMinSize(minHeight = 44.dp)
-                        .padding(vertical = 10.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (draft.isEmpty()) {
-                    Text(
-                        text = hint.ifBlank { "发消息…" },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                    )
-                }
-                BasicTextField(
-                    value = draft,
-                    onValueChange = onDraftChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = canInput,
-                    textStyle =
-                        MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 15.sp,
-                            lineHeight = 22.sp,
-                        ),
-                    cursorBrush = SolidColor(OrcaColors.accentBlue),
-                    maxLines = 6,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions =
-                        KeyboardActions(
-                            onSend = {
-                                if (!canSubmit) return@KeyboardActions
-                                if (isQueueMode) onQueue() else onSend()
-                            },
-                        ),
-                )
-            }
-            Box(
-                modifier =
-                    Modifier
-                        .size(OrcaSpace.touch)
-                        .clip(CircleShape)
-                        .clickable(enabled = canInput) { picker.launch(arrayOf("*/*")) },
-                contentAlignment = Alignment.Center,
-            ) {
-                OrcaAttachIcon(
-                    tint =
-                        if (canInput) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
-                    size = 18.dp,
-                )
-            }
-            if (isQueueMode) {
+                        .onFocusChanged { focused = it.isFocused },
+                enabled = canInput,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.onSurface),
+                cursorBrush = SolidColor(colors.primary),
+                maxLines = 6,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { if (canSubmit) submit() }),
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
+                            .padding(vertical = 11.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (draft.isEmpty()) {
+                            Text(
+                                text = hint.ifBlank { "发消息…" },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+            if (onEffortChange != null && mode != ComposerMode.BLOCKED) {
+                val activeEffort = effort != EffortLevel.DEFAULT
                 Surface(
-                    onClick = onQueue,
-                    enabled = canSubmit,
-                    modifier = Modifier.minimumInteractiveComponentSize().heightIn(min = 42.dp),
+                    onClick = { showEffortSheet = true },
+                    enabled = canInput,
+                    modifier =
+                        Modifier
+                            .padding(end = 2.dp, bottom = 7.dp)
+                            .semantics { contentDescription = "思考强度：${effort.label}" },
                     shape = RoundedCornerShape(OrcaRadius.pill),
                     color =
-                        if (canSubmit) OrcaColors.accentBlue
-                        else MaterialTheme.colorScheme.surfaceVariant,
+                        if (activeEffort) OrcaColors.accentBlue.copy(alpha = 0.13f)
+                        else OrcaColors.bgRaised,
+                    border =
+                        BorderStroke(
+                            1.dp,
+                            if (activeEffort) OrcaColors.accentBlue.copy(alpha = 0.5f)
+                            else OrcaColors.borderSubtle,
+                        ),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
-                        OrcaQueueIcon(
-                            tint =
-                                if (canSubmit) Color.White
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            size = 14.dp,
-                        )
                         Text(
-                            text = "排队",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            text = if (activeEffort) effort.label else "思考",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
                             color =
-                                if (canSubmit) Color.White
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                if (activeEffort) OrcaColors.accentBlue
+                                else colors.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                        OrcaChevronDown(
+                            tint = if (activeEffort) OrcaColors.accentBlue else colors.onSurfaceVariant,
+                            size = 8.dp,
                         )
                     }
                 }
-            } else if (mode == ComposerMode.TAKE_CONTROL) {
-                OrcaTextAction(label = "接管并发送", enabled = canSubmit, onClick = onSend)
-            } else {
-                Box(
-                    modifier =
-                        Modifier
-                            .size(OrcaSpace.touch)
-                            .padding(4.dp)
-                            .background(
-                                if (canSubmit) OrcaColors.accentBlue
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                                CircleShape,
-                            )
-                            .clip(CircleShape)
-                            .clickable(enabled = canSubmit) { onSend() },
-                    contentAlignment = Alignment.Center,
+            }
+            if (stoppable) {
+                IconButton(
+                    onClick = onInterrupt,
+                    enabled = canInterrupt,
+                    modifier = Modifier.semantics { contentDescription = "停止执行" },
                 ) {
-                    if (sending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 1.6.dp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        OrcaSendIcon(
-                            tint =
-                                if (canSubmit) Color.White
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        )
+                    OrcaStopIcon(OrcaColors.accentRed, 14.dp)
+                }
+            }
+            if (mode == ComposerMode.TAKE_CONTROL) {
+                OrcaTextAction(label = "接管并发送", enabled = canSubmit, onClick = submit)
+            } else {
+                val actionLabel = when {
+                    sending -> "发送中"
+                    isQueueMode -> "加入待发队列"
+                    else -> "发送消息"
+                }
+                IconButton(
+                    onClick = submit,
+                    enabled = canSubmit,
+                    modifier = Modifier.semantics { contentDescription = actionLabel },
+                ) {
+                    val tint = if (canSubmit) colors.onPrimary else colors.onSurfaceVariant
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(38.dp)
+                                .background(if (canSubmit) colors.primary else colors.surfaceVariant, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        when {
+                            sending ->
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 1.6.dp,
+                                    color = tint,
+                                )
+                            isQueueMode -> OrcaQueueIcon(tint = tint, size = 17.dp)
+                            else -> OrcaSendIcon(tint = tint, size = 17.dp)
+                        }
                     }
                 }
             }
@@ -443,6 +549,7 @@ internal fun SessionSettingsSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     var copiedId by remember { mutableStateOf(false) }
 
@@ -562,7 +669,12 @@ internal fun SessionSettingsSheet(
 
             OrcaPrimaryButton(
                 label = "完成配置",
-                onClick = onDismiss,
+                onClick = {
+                    scope.launch {
+                        runCatching { sheetState.hide() }
+                        onDismiss()
+                    }
+                },
             )
         }
     }

@@ -679,3 +679,201 @@ fn validate_server_allows_tailnet_and_private_ws_but_rejects_public_ws() {
         );
     }
 }
+
+#[test]
+fn out_of_bounds_connect_and_premature_ack_are_rejected_without_dropping_unsent_rows() {
+    let generation = 9_u64;
+    let epoch = generation << 32 | 1;
+    let device_name = crate::device_name::DeviceNameSource::default();
+    let (_dir, mut durable, control, send_tx, _send_rx, command_seq) = remote_test_host();
+    let mut active = None;
+    let mut offered = 0;
+
+    for idx in 1..=4 {
+        durable
+            .journal
+            .enqueue_remote(&json!({"type": "event", "idx": idx}))
+            .unwrap();
+    }
+
+    // Extreme out-of-bounds server_seq must be rejected immediately in O(1).
+    handle_network_event(
+        NetworkEvent::Connected(epoch, i64::MAX, None),
+        generation,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(active, None);
+    assert_eq!(durable.journal.pending(0, 10).unwrap().len(), 4);
+
+    // Valid connect + coalesced Sent(3) advances sent to 3; premature ack(4) must fail
+    // and preserve unsent row 4.
+    let epoch2 = generation << 32 | 2;
+    connect_remote(
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        epoch2,
+    );
+    handle_network_event(
+        NetworkEvent::Sent(epoch2, 3),
+        generation,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(durable.journal.watermarks().unwrap(), (3, 0));
+
+    handle_network_event(
+        NetworkEvent::Frame(epoch2, json!({"type": "ack", "seq": 4})),
+        generation,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(active, None);
+    assert_eq!(durable.journal.watermarks().unwrap(), (3, 0));
+    assert_eq!(durable.journal.pending(0, 10).unwrap().len(), 4);
+}
+
+#[test]
+fn negative_handshake_seqs_and_invalid_sent_seq_reject_epoch_without_crashing() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let host = NativeSessionHost::new(FakeTransport, vec![workspace]).unwrap();
+    let journal = RemoteJournal::open(dir.path().join("journal.sqlite")).unwrap();
+    let mut durable = DurableHost::new(host, journal).unwrap();
+    let control = RemoteControl::default();
+    let mut active = None;
+    let mut offered = 0;
+    let (send_tx, _send_rx) = mpsc::sync_channel(8);
+    let command_seq = AtomicI64::new(0);
+    let device_name = crate::device_name::DeviceNameSource::default();
+
+    // Negative server_seq in Connected rejects the epoch and never touches the journal.
+    handle_network_event(
+        NetworkEvent::Connected(1, -5, Some(0)),
+        0,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(active, None);
+    assert_eq!(control.rejected_epoch.load(Ordering::SeqCst), 1);
+    assert_eq!(durable.journal.watermarks().unwrap(), (0, 0));
+
+    // Negative server_command_seq also rejects cleanly.
+    handle_network_event(
+        NetworkEvent::Connected(2, 0, Some(-1)),
+        0,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(active, None);
+    assert_eq!(control.rejected_epoch.load(Ordering::SeqCst), 2);
+
+    // Valid connect followed by invalid Sent(seq) rejects epoch instead of returning Err.
+    handle_network_event(
+        NetworkEvent::Connected(3, 0, Some(0)),
+        0,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(active, Some(3));
+    handle_network_event(
+        NetworkEvent::Sent(3, 999),
+        0,
+        &mut durable,
+        &control,
+        &mut active,
+        &mut offered,
+        &send_tx,
+        &command_seq,
+        None,
+        None,
+        &device_name,
+    )
+    .unwrap();
+    assert_eq!(active, None);
+    assert_eq!(control.rejected_epoch.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn handshake_receive_enforces_deadline_despite_continuous_ping_frames() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        for _ in 0..8 {
+            if ws.send(Message::Ping(vec![1u8, 2, 3].into())).is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(60));
+        }
+    });
+
+    let url = format!("ws://{addr}/v3/remote/ws");
+    let mut client = connect_with_timeout(&url, Duration::from_secs(2)).unwrap();
+    let stopped = AtomicBool::new(false);
+    let err = receive_with_deadline(
+        &mut client,
+        Instant::now() + Duration::from_millis(250),
+        &stopped,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("remote_handshake_timeout"),
+        "expected remote_handshake_timeout, got: {err}"
+    );
+    let _ = server.join();
+}

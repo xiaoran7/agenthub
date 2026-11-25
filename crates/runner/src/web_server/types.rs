@@ -20,6 +20,38 @@ impl Default for WebServerConfig {
     }
 }
 
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub(crate) fn parse_path_and_query(full_path: &str) -> (&str, HashMap<String, String>) {
     let mut parts = full_path.splitn(2, '?');
     let path = parts.next().unwrap_or("/");
@@ -27,9 +59,9 @@ pub(crate) fn parse_path_and_query(full_path: &str) -> (&str, HashMap<String, St
     if let Some(q) = parts.next() {
         for pair in q.split('&') {
             if let Some((k, v)) = pair.split_once('=') {
-                query.insert(k.to_string(), v.to_string());
+                query.insert(percent_decode(k), percent_decode(v));
             } else if !pair.is_empty() {
-                query.insert(pair.to_string(), String::new());
+                query.insert(percent_decode(pair), String::new());
             }
         }
     }

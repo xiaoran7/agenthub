@@ -794,3 +794,24 @@ fn windows_msix_claude_roots_in_discovers_packaged_profiles() {
             )
     }));
 }
+#[test]
+fn codex_and_antigravity_gateways_skip_invalid_session_id_injection() {
+    let codex = CodexGatewayProfile::new("http://127.0.0.1:3425/v1", "sk-test", "test", vec![]);
+    let mut codex_cmd = Command::new("codex");
+    let mut m = None;
+    codex.inject_into_command_with_session(&mut codex_cmd, &mut m, Some("codex_../evil"));
+    assert!(
+        codex_cmd
+            .get_envs()
+            .all(|(k, _)| k != "X_MAGPIE_SESSION" && k != "X_CONVERSATION_ID")
+    );
+
+    let ag = AntigravityGatewayProfile::new("http://127.0.0.1:3425", "sk-test", "test", vec![]);
+    let mut ag_cmd = Command::new("antigravity");
+    ag.inject_into_command_with_session(&mut ag_cmd, &mut m, Some("antigravity_bad\nheader"));
+    assert!(
+        ag_cmd
+            .get_envs()
+            .all(|(k, _)| k != "X_MAGPIE_SESSION" && k != "X_CONVERSATION_ID")
+    );
+}

@@ -1,0 +1,611 @@
+        /* ==========================================================================
+           Layout pass: the same primitives, drawn on the window's own scale.
+           The window's size, the sidebar's width and the rhythm of every card
+           come from --layout-* (layoutTokens() from AppLayout), so a bigger
+           window reads bigger instead of just emptier.
+           ========================================================================== */
+        /* hairline rules everywhere, so no divider outweighs the text it separates */
+        .list, .led-strip, .stats, .top, .sidebar { border-width: 0; }
+        .list, .led-strip, .stats { border: var(--rule); border-radius: var(--r); }
+        .sidebar { border-right: var(--rule); }
+        .row + .row { border-top: var(--rule-2); }
+        .led-strip .blk + .blk { border-left: var(--rule-2); }
+        button { border-radius: var(--r-s); }
+        .icon { width: 30px; height: 30px; border-radius: 9px; }
+        .icon svg { width: 17px; height: 17px; }
+        .icon.side-toggle svg { width: 18px; height: 18px; }
+
+        /* ---- header ------------------------------------------------------------ */
+        /* the sidebar's button, where you are, and what is live; the header is a
+           card of its own that lifts off the page as the content scrolls under it */
+        .top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          height: var(--top-h); gap: 8px; padding: 0 var(--inset);
+          background: var(--bg); border-bottom: var(--rule);
+          position: sticky; top: 0; z-index: 20; flex: none;
+          transition: margin-left var(--dur-2) var(--ease);
+        }
+        .top-left {
+          display: flex; align-items: center; gap: 8px; min-width: 0; flex: none;
+        }
+        .top .brand { font-size: var(--fs-title); font-weight: 650; letter-spacing: -.01em; }
+        .top .brand .logo svg { width: 18px; height: 18px; }
+        .crumb { gap: 6px; font-size: var(--fs-body); }
+        .crumb > b { font-weight: 600; color: var(--fg); font-size: var(--fs-body); }
+        .crumb > i { font-style: normal; color: var(--faint); font-size: var(--fs-note); padding: 0 1px; }
+        .crumb > span { color: var(--muted); font-size: var(--fs-note); }
+        .live {
+          display: inline-flex; align-items: center; gap: 7px; flex: none;
+          height: 24px; padding: 0 9px 0 8px; border-radius: 999px;
+          background: var(--card-2); border: var(--rule);
+          font-size: var(--fs-note); color: var(--ctl-fg); white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+        }
+        .live > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2.5px var(--green-soft); }
+        .live > b { font-weight: 650; color: var(--fg); font-size: var(--fs-note); }
+        .live > span { color: var(--muted); font-size: calc(var(--fs-note) - 1px); }
+        /* beside the sidebar the ledger already carries the count and the header
+           states whether the link is alive */
+        .live.quiet { padding: 0 8px; gap: 0; }
+        .live.quiet > b, .live.quiet > span { display: none; }
+        .live.stale > i { background: var(--amber); box-shadow: 0 0 0 2.5px var(--amber-soft); }
+        .live.off > i { background: var(--red); box-shadow: 0 0 0 2.5px var(--red-soft); }
+        .live.off { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
+        :root.link-off .side-gw i { background: var(--red); }
+
+        /* the header's page switch, when the sidebar is away: transparent track,
+           elevated white card buttons on active/hover, larger and more touchable */
+        .top .top-slot,
+        #navTopSlot {
+          position: relative; left: auto; top: auto; transform: none;
+          display: flex; align-items: center; justify-content: center;
+          height: 100%; min-width: 0; flex: 1;
+          pointer-events: none;
+        }
+        .top .top-slot > #nav,
+        #navTopSlot > .thumb { position: relative; }
+        .top .top-slot > #nav,
+        #navTopSlot > #nav {
+          pointer-events: auto;
+          left: auto; top: auto; transform: none;
+          align-self: center; display: flex; flex-direction: row; flex: none; height: 36px;
+          max-width: 100%;
+          padding: 2px; border-radius: 9px; gap: 4px; background: transparent;
+        }
+        #navTopSlot > .thumb { display: none; }
+        .top .top-slot > #nav button[data-view],
+        #navTopSlot > #nav button[data-view] {
+          display: inline-flex; width: auto; height: 32px; padding: 0 16px; border-radius: 8px;
+          font-size: 13.5px; gap: 6px; align-items: center; justify-content: center;
+          text-align: center; color: var(--fg-2); font-weight: 500;
+          background: transparent; cursor: pointer;
+          transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
+        }
+        .top .top-slot > #nav button[data-view] > span,
+        #navTopSlot > #nav button[data-view] > span { display: inline; white-space: nowrap; text-overflow: clip; transform: none !important; }
+        #navTopSlot > #nav:not(.tight) .nav-ic { display: inline-block; width: 15px; height: 15px; }
+        #navTopSlot > #nav.tight .nav-ic { display: none; }
+        #navTopSlot > #nav.tight button[data-view] { padding: 0 10px; }
+        .top .top-slot > #nav button[data-view]:hover:not(.on),
+        #navTopSlot > #nav button[data-view]:hover:not(.on) {
+          background: rgba(255, 255, 255, 0.65);
+          color: var(--fg);
+        }
+        .top .top-slot > #nav button[data-view]:hover > span,
+        #navTopSlot > #nav button[data-view]:hover > span { transform: none !important; }
+        .top .top-slot > #nav button[data-view]:hover .nav-ic,
+        #navTopSlot > #nav button[data-view]:hover .nav-ic { transform: none !important; }
+        :root.dark .top .top-slot > #nav button[data-view]:hover:not(.on),
+        :root.dark #navTopSlot > #nav button[data-view]:hover:not(.on) {
+          background: rgba(255, 255, 255, 0.08);
+          color: var(--fg);
+        }
+        .top .top-slot > #nav button[data-view].on,
+        .top .top-slot > #nav button[data-view]:active,
+        #navTopSlot > #nav button[data-view].on,
+        #navTopSlot > #nav button[data-view]:active {
+          background: #ffffff !important;
+          color: #1c1c21 !important;
+          font-weight: 600;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.06);
+        }
+        :root.dark .top .top-slot > #nav button[data-view].on,
+        :root.dark .top .top-slot > #nav button[data-view]:active,
+        :root.dark #navTopSlot > #nav button[data-view].on,
+        :root.dark #navTopSlot > #nav button[data-view]:active {
+          background: rgba(255, 255, 255, 0.16) !important;
+          color: #ffffff !important;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+        }
+        .top .top-slot > #nav .nav-ic,
+        #navTopSlot > #nav .nav-ic { flex: none; opacity: .65; }
+        .top .top-slot > #nav button.on .nav-ic,
+        #navTopSlot > #nav button.on .nav-ic { opacity: 1; }
+        .actions {
+          display: flex;
+          align-items: center;
+          gap: 3px;
+          margin-left: auto !important;
+          flex: none;
+        }
+
+        /* ---- the sidebar ------------------------------------------------------- */
+        /* a width the reader dragged to wins over the window's own share */
+        body.window { --side-w: min(var(--side-w-override, var(--layout-side-w, 236px)), calc(var(--viewport-w, 100vw) * .3)); }
+        /* the page's column starts where the rail ends, so it follows the rail
+           itself; no window breakpoint has to guess the same width twice */
+        body { position: relative; }
+        .sidebar { position: fixed; left: 0; top: 0; bottom: 0; height: 100vh; z-index: 30; }
+        .top, .view-slot { margin-left: var(--side-w); }
+        :root.no-side .top, :root.no-side .view-slot { margin-left: 0; }
+        .sidebar { width: var(--side-w); background: var(--card); }
+        .view-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+        /* a centre column is a place to sit in, not to read across: the page
+           spans it and keeps only its own inset */
+        :root { --view-pad: var(--inset); }
+        /* the toggle really takes the sidebar away: no rail, no gutter, the header
+           carries the brand and the page names instead */
+        html.no-side .sidebar { display: none; }
+        .side-top { height: var(--top-h); padding: 0 14px; justify-content: flex-start; }
+        .side-top .rail-toggle { margin-left: 0; margin-right: auto; }
+        .side-scroll { padding: 4px 12px 12px; }
+        .side-slot { padding: 6px 12px 12px; }
+        .side-foot { padding: 10px 12px 12px; }
+
+        /* ---- skeleton shimmer loading placeholders ----------------------------- */
+        .skeleton {
+          display: block;
+          border-radius: 6px;
+          background: linear-gradient(90deg, rgba(160, 168, 185, 0.14) 25%, rgba(160, 168, 185, 0.35) 50%, rgba(160, 168, 185, 0.14) 75%);
+          background-size: 200% 100%;
+          animation: skeleton-shift 1.6s ease-in-out infinite;
+        }
+        :root.dark .skeleton {
+          background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.05) 75%);
+          background-size: 200% 100%;
+        }
+        @keyframes skeleton-shift {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+        .skeleton-card {
+          padding: 18px 22px;
+          border-radius: var(--r);
+          background: var(--card);
+          border: var(--rule);
+          display: flex;
+          flex-direction: column;
+          gap: 13px;
+          box-shadow: 0 1px 2px rgba(20, 22, 30, .03);
+        }
+        .list > .skeleton-card {
+          border: none;
+          background: transparent;
+          box-shadow: none;
+          border-radius: 0;
+        }
+        .skeleton-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          height: 20px;
+        }
+        .skeleton-bar {
+          height: 14px;
+          border-radius: 6px;
+          background: linear-gradient(90deg, rgba(160, 168, 185, 0.14) 25%, rgba(160, 168, 185, 0.35) 50%, rgba(160, 168, 185, 0.14) 75%);
+          background-size: 200% 100%;
+          animation: skeleton-shift 1.6s ease-in-out infinite;
+        }
+        :root.dark .skeleton-bar {
+          background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.05) 75%);
+          background-size: 200% 100%;
+        }
+        .skeleton-chart-box {
+          width: 100%;
+          height: 180px;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-end;
+          padding: 12px 14px;
+        }
+        .skeleton-chart-bars {
+          display: flex;
+          align-items: flex-end;
+          gap: 12px;
+          height: 140px;
+          width: 100%;
+          padding-bottom: 4px;
+        }
+        .skeleton-chart-bars > .skeleton-bar {
+          flex: 1;
+          min-width: 8px;
+          border-radius: 4px 4px 0 0;
+        }
+        .side-gw { height: 32px; padding: 0 10px; border-radius: var(--r-s); font-size: var(--fs-note); gap: 9px; }
+
+        /* ---- views ------------------------------------------------------------- */
+        /* the page scrolls under its header; what it holds keeps to a width the eye
+           can follow, and the window's size decides how much of it fits */
+        .view {
+          flex: 1; min-height: 0; overflow-y: auto;
+          padding: 16px var(--view-pad) 20px;
+          gap: 0;
+        }
+
+        /* ---- the ledger --------------------------------------------------------- */
+        /* the four facts that answer "what is this machine doing right now" */
+        .led-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--card); }
+        .led-strip .blk { padding: 16px calc(var(--inset) - 2px) 15px; }
+        .led-strip .k { font-size: var(--fs-note); letter-spacing: .01em; color: var(--muted); font-weight: 500; }
+        .led-strip .v { margin-top: 6px; font: 650 var(--fs-figure)/1.1 var(--num); letter-spacing: -.03em; }
+        .led-strip .sub { margin-top: 5px; font-size: var(--fs-note); color: var(--muted); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .led-strip .blk.clickable { position: relative; cursor: default; }
+        .led-strip .blk.clickable:hover { background: var(--card-2); }
+        /* a call to action, not a badge: the unpaired tile is the one thing to do */
+        .led-strip .blk.cta .v { color: var(--accent); }
+        .led-strip .blk.cta .sub { color: var(--accent); opacity: .75; }
+        .led-strip .blk.cta::after {
+          content: "›"; position: absolute; right: 16px; top: 15px;
+          font-size: 18px; line-height: 1; color: var(--accent); opacity: .5;
+          transition: transform .16s var(--ease), opacity .16s var(--ease);
+        }
+        .led-strip .blk.cta:hover::after { transform: translateX(2px); opacity: 1; }
+
+        /* ---- the bar above a list: search, count, actions ----------------------- */
+        .tools { margin: 0 0 12px; gap: 8px; min-height: 34px; }
+        .tools .inp { width: 300px; height: 34px; border-radius: var(--r-s); font-size: var(--fs-body); padding: 0 12px; }
+        .tools .tag { background: var(--card); border: var(--rule); height: 26px; font-size: var(--fs-note); padding: 0 10px; }
+        .tools > .label { font-size: var(--fs-note); font-weight: 600; color: var(--fg-2); }
+        .text { font-size: var(--fs-body); padding: 4px 9px; border-radius: 8px; }
+        .text.action { height: 34px; padding: 0 13px; border-radius: var(--r-s); gap: 7px; font-weight: 500; }
+        .text .ic { width: 15px; height: 15px; }
+
+        /* ---- cards and rows ----------------------------------------------------- */
+        .stack { gap: 12px; }
+        .list { box-shadow: 0 1px 2px rgba(20, 22, 30, .03); }
+        .row { min-height: 56px; padding: 9px var(--inset); gap: 13px; }
+        .row .name { font-weight: 550; font-size: var(--fs-body); }
+        .row .sub { font-size: var(--fs-note); margin-top: 2px; }
+        .group-head { min-height: 42px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); transition: background .14s; }
+        .group-head:hover { background: var(--card-2); }
+        .group-head .gname { font-weight: 650; font-size: var(--fs-body); letter-spacing: -.005em; }
+        .group-head > .ic { color: var(--muted); }
+        .group-head .gpath { color: var(--faint); font-size: var(--fs-note); }
+        .group-head.closed { border-bottom-color: transparent; }
+        .group-head .chev { color: var(--muted); }
+        .group-head .gcount { font-size: var(--fs-note); }
+
+        /* a session is a title and one line of facts; the provider is a leading
+           glyph, the time a quiet column, so the titles carry the whole width */
+        #sessionsContainer .row { gap: 12px; padding-top: 10px; padding-bottom: 10px; }
+        #sessionsContainer .row .who { min-width: 0; }
+        #sessionsContainer .row .name { font-weight: 480; font-size: var(--fs-body); }
+        #sessionsContainer .row .when,
+        #sessionsContainer .row .who .when {
+          flex: none; align-self: center; width: auto; min-width: 96px; margin-left: auto; margin-right: 0;
+          text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          font-size: var(--fs-note); color: var(--faint); font-variant-numeric: tabular-nums;
+        }
+        #sessionsContainer .row .model {
+          flex: none; max-width: 180px; margin-left: auto; min-width: 0; flex-shrink: 1;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          font-family: var(--code); font-size: var(--fs-note); color: var(--faint); text-align: right;
+        }
+        #sessionsContainer .row .model + .when { margin-left: 12px; }
+        #sessionsContainer .session-facts { gap: 7px; }
+        #sessionsContainer .session-facts .tokens { color: var(--faint); font-size: calc(var(--fs-note) - 1px); }
+        /* when the rail leaves the page narrow, the model note goes first and the
+           clock keeps its line whole */
+        @container view-q (max-width: 640px) {
+          #sessionsContainer .row .model { display: none; }
+          #sessionsContainer .row .when,
+          #sessionsContainer .row .who .when { width: auto; max-width: 140px; }
+        }
+        #sessionsContainer .session-facts .tag.cap { padding: 1px 6px; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--fg-2); background: var(--card-2); border: var(--rule-2); height: 19px; }
+
+        /* a session's subagents, folded under the conversation that spawned
+           them: the same quiet rows, one indent per spawn depth, never a card
+           of their own */
+        #sessionsContainer .row.sess .sm-check,
+        #sessionsContainer .row.sess .sm-check-space {
+          flex: none; width: 14px; height: 14px; margin: 0 1px;
+          accent-color: var(--accent); cursor: pointer;
+        }
+        #sessionsContainer .row.sess .sm-check-space { display: block; }
+        #sessionsContainer .row.sess .sm-del-space {
+          flex: none; display: block; width: 24px; height: 24px; pointer-events: none;
+        }
+        #sessionsContainer .row.sess-more {
+          width: 100%; min-height: 38px; padding: 6px var(--inset);
+          justify-content: center; background: transparent; border: 0; border-top: var(--rule-2);
+          color: var(--muted); font-size: var(--fs-note); font-weight: 550; cursor: pointer;
+          transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+        }
+        #sessionsContainer .row.sess-more:hover {
+          background: var(--card-2); color: var(--fg);
+        }
+        #sessionsContainer .row.sess .sm-del {
+          flex: none; display: inline-flex; align-items: center; justify-content: center;
+          width: 24px; height: 24px; padding: 0; border-radius: 6px; color: var(--faint);
+          opacity: 0; transition: opacity var(--dur-2) var(--ease), color var(--dur-1), background var(--dur-1);
+        }
+        #sessionsContainer .row.sess .sm-del svg { width: 13px; height: 13px; }
+        #sessionsContainer .row.sess:hover .sm-del,
+        #sessionsContainer .row.sess .sm-del:focus-visible { opacity: 1; }
+        #sessionsContainer .row.sess .sm-del:hover { color: var(--red); background: var(--red-soft); }
+        #sessionsContainer .subs {
+          display: flex; flex-direction: column; gap: 0;
+          border-top: var(--rule-2); background: color-mix(in srgb, var(--fg) 1.6%, transparent);
+        }
+        #sessionsContainer .sub-row {
+          display: flex; align-items: baseline; gap: 8px; min-width: 0;
+          padding: 5px 14px 5px calc(14px + 14px + var(--d, 0) * 16px);
+          font-size: var(--fs-note); color: var(--muted);
+        }
+        #sessionsContainer .sub-row + .sub-row { border-top: var(--rule-2); }
+        #sessionsContainer .sub-kind {
+          flex: none; font-family: var(--code); font-size: calc(var(--fs-note) - 1.5px);
+          color: var(--fg-2); background: var(--pill); border-radius: 5px; padding: 1px 6px;
+        }
+        #sessionsContainer .sub-desc {
+          flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+          color: var(--fg-2);
+        }
+        #sessionsContainer .sub-facts {
+          flex: none; font-variant-numeric: tabular-nums; color: var(--faint);
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%;
+        }
+        #sessionsContainer .row.sess.has-subs {
+          cursor: pointer;
+        }
+        #sessionsContainer .row.sess .sub .sub-count {
+          margin-left: 7px;
+          height: 18px;
+          padding: 0 6px;
+          font-size: calc(var(--fs-note) - 1.5px);
+        }
+        #sessionsContainer .row.sess .sub .sub-count.sm-toggle-subs {
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+          border: none;
+          font-family: inherit;
+          vertical-align: middle;
+        }
+        #sessionsContainer .row.sess .sub .sub-count.sm-toggle-subs:hover {
+          background: color-mix(in srgb, var(--accent) 15%, transparent);
+          color: var(--accent);
+        }
+        #sessionsContainer .row.sess .sub-chev {
+          width: 10px;
+          height: 10px;
+          flex: none;
+          transition: transform var(--dur-2) var(--ease-spring);
+        }
+        #sessionsContainer .row.sess.subs-closed .sub-chev {
+          transform: rotate(-90deg);
+        }
+        #sessionsContainer .subs.folded {
+          display: none !important;
+        }
+        /* the pick bar's own controls, in the tools row */
+        .pick-all { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-note); color: var(--muted); cursor: pointer; }
+        /* One checkbox drawn from the console's own tokens.
+           `accent-color` leaves the box's size, corner radius and border to
+           the operating system, which is the one control on the page that does
+           not follow the sheet. `appearance: none` keeps the native element —
+           so keyboard, form value, `:indeterminate` and screen readers all keep
+           working — and only takes over how it is painted. */
+        .pick-all input,
+        #sessionsContainer .row.sess .sm-check {
+          -webkit-appearance: none;
+          appearance: none;
+          flex: none;
+          position: relative;
+          width: 14px;
+          height: 14px;
+          margin: 0;
+          border: 1.5px solid var(--line);
+          border-radius: 4px;
+          background: var(--card);
+          cursor: pointer;
+          transition: background var(--dur-1), border-color var(--dur-1);
+        }
+        .pick-all input:hover,
+        #sessionsContainer .row.sess .sm-check:hover { border-color: var(--accent); }
+        .pick-all input:checked,
+        .pick-all input:indeterminate,
+        #sessionsContainer .row.sess .sm-check:checked {
+          background: var(--accent);
+          border-color: var(--accent);
+        }
+        .pick-all input:checked::after,
+        #sessionsContainer .row.sess .sm-check:checked::after {
+          content: "";
+          position: absolute;
+          left: 3.5px;
+          top: 0.5px;
+          width: 4px;
+          height: 8px;
+          border: solid var(--accent-fg);
+          border-width: 0 1.8px 1.8px 0;
+          transform: rotate(42deg);
+        }
+        .pick-all input:indeterminate::after {
+          content: "";
+          position: absolute;
+          left: 2px;
+          top: 5px;
+          width: 7px;
+          height: 1.8px;
+          border-radius: 1px;
+          background: var(--accent-fg);
+        }
+        .sm-ask-list { grid-column: 1 / -1; margin: 2px 0 0; padding: 0; list-style: none; text-align: left; max-height: 160px; overflow-y: auto; width: 100%; }
+        .sm-ask-list li { padding: 4px 2px; font-size: var(--fs-note); color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: var(--rule-2); }
+        .sm-ask-list li:first-child { border-top: 0; }
+        .sm-ask-list li.more { color: var(--muted); }
+        .center-bar { grid-column: 1 / -1; justify-content: center; border-top: 0; }
+        .editor.center .center-note { text-align: center; }
+
+        /* ---- stat rows: shared column grid ------------------------------------- */
+        /* who | share | number | (extra). the columns are explicit so every list in
+           the console puts its figures under the same edges */
+        .row.stat { display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(110px, 1.4fr) 104px minmax(72px, auto); align-items: center; gap: 16px; min-height: 54px; }
+        .row.stat > .ic { grid-column: 1; align-self: center; width: 20px; height: 20px; }
+        .row.stat .who { flex: none; grid-column: 2; }
+        .row.stat .share { grid-column: 3; flex: none; height: 4px; margin: 0; background: var(--pill); border-radius: 3px; }
+        .row.stat .share i { background: var(--accent); opacity: 1; border-radius: 3px; }
+        .row.stat .num { grid-column: 4; align-items: flex-end; min-width: 0; }
+        .row.stat .num b { font: 650 var(--fs-body)/1.3 var(--num); letter-spacing: -.01em; }
+        .row.stat .num small { font-size: calc(var(--fs-note) - 1px); }
+        .row.stat .cost { grid-column: 5; align-self: center; justify-self: end; margin: 0; min-width: 0; color: var(--green); font-size: var(--fs-note); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #workspacesList .row.stat .cost { color: var(--muted); }
+        /* the folder reads as one line: the parent is context, the leaf is the name */
+        .ws-loc { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--faint); margin-top: 2px; }
+        .ws-loc .ws-leaf { color: var(--fg-2); }
+        /* a workspace's leading mark is its own initials, not a repeated folder icon */
+        .ws-ini {
+          width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+          background: var(--card-2); border: var(--rule); color: var(--muted); font-size: calc(var(--fs-note) - 3px); letter-spacing: .02em;
+        }
+
+        /* Workspace avatar badge: modern squircle with friendly project/git icon */
+        .ws-avatar {
+          width: 32px; height: 32px; border-radius: var(--r-s);
+          display: inline-flex; align-items: center; justify-content: center;
+          flex: none; position: relative;
+          transition: transform var(--dur-2) var(--ease-spring), box-shadow var(--dur-2) var(--ease);
+        }
+        .row.stat:hover .ws-avatar { transform: scale(1.06); }
+        .ws-avatar svg { width: 17px; height: 17px; }
+        .ws-avatar.color-0 { background: color-mix(in srgb, #3b82f6 14%, var(--card)); color: #3b82f6; border: 1px solid color-mix(in srgb, #3b82f6 24%, transparent); }
+        .ws-avatar.color-1 { background: color-mix(in srgb, #10b981 14%, var(--card)); color: #10b981; border: 1px solid color-mix(in srgb, #10b981 24%, transparent); }
+        .ws-avatar.color-2 { background: color-mix(in srgb, #8b5cf6 14%, var(--card)); color: #8b5cf6; border: 1px solid color-mix(in srgb, #8b5cf6 24%, transparent); }
+        .ws-avatar.color-3 { background: color-mix(in srgb, #f59e0b 14%, var(--card)); color: #f59e0b; border: 1px solid color-mix(in srgb, #f59e0b 24%, transparent); }
+        .ws-avatar.color-4 { background: color-mix(in srgb, #06b6d4 14%, var(--card)); color: #06b6d4; border: 1px solid color-mix(in srgb, #06b6d4 24%, transparent); }
+        .ws-avatar.color-5 { background: color-mix(in srgb, #ec4899 14%, var(--card)); color: #ec4899; border: 1px solid color-mix(in srgb, #ec4899 24%, transparent); }
+
+        /* ---- Workspaces List specific rock-solid column alignment ---- */
+        #workspacesList .row.stat {
+          display: grid;
+          grid-template-columns: 32px minmax(0, 1fr) 112px 92px;
+          align-items: center;
+          gap: 16px;
+          min-height: 56px;
+        }
+        #workspacesList .row.stat .ws-avatar { grid-column: 1; align-self: center; }
+        #workspacesList .row.stat .who { grid-column: 2; min-width: 0; }
+        #workspacesList .row.stat .share { display: none; }
+        #workspacesList .row.stat .num {
+          grid-column: 3;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          justify-content: center;
+          min-width: 112px;
+          font-variant-numeric: tabular-nums;
+        }
+        #workspacesList .row.stat .num b {
+          font: 650 var(--fs-body)/1.35 var(--num);
+          letter-spacing: -.01em;
+          color: var(--fg);
+        }
+        #workspacesList .row.stat .num small {
+          font-size: calc(var(--fs-note) - 1px);
+          color: var(--muted);
+          line-height: 1.35;
+          margin-top: 2px;
+        }
+        #workspacesList .row.stat .ws-time-col {
+          grid-column: 4;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          justify-content: center;
+          min-width: 92px;
+          white-space: nowrap;
+        }
+        #workspacesList .row.stat .ws-time-val {
+          font-size: var(--fs-note);
+          color: var(--fg-2);
+          line-height: 1.35;
+          font-variant-numeric: tabular-nums;
+          font-weight: 500;
+        }
+        #workspacesList .row.stat .ws-time-lbl {
+          font-size: calc(var(--fs-note) - 1px);
+          color: var(--muted);
+          line-height: 1.35;
+          margin-top: 2px;
+        }
+
+        @container view-q (min-width: 860px) {
+          #workspacesList .row.stat {
+            grid-template-columns: 32px minmax(0, 1fr) minmax(90px, 1.2fr) 112px 92px;
+          }
+          #workspacesList .row.stat .share {
+            grid-column: 3;
+            display: block;
+          }
+          #workspacesList .row.stat .num {
+            grid-column: 4;
+          }
+          #workspacesList .row.stat .ws-time-col {
+            grid-column: 5;
+          }
+        }
+
+        @container view-q (max-width: 520px) {
+          #workspacesList .row.stat {
+            grid-template-columns: 32px minmax(0, 1fr) 96px;
+            gap: 10px;
+          }
+          #workspacesList .row.stat .ws-time-col {
+            display: none;
+          }
+          #workspacesList .row.stat .num {
+            grid-column: 3;
+            min-width: 96px;
+          }
+        }
+        .row .name-line .tag.ok { height: 19px; font-size: calc(var(--fs-note) - 1.5px); padding: 0 6px; }
+        .row .tag { height: 22px; font-size: calc(var(--fs-note) - 0.5px); padding: 0 9px; }
+        .row .tag.mono { font-size: calc(var(--fs-note) - 1.5px); }
+        .tag { height: 24px; font-size: var(--fs-note); padding: 0 10px; }
+
+        /* ---- section heads ------------------------------------------------------ */
+        .row-head { min-height: 42px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); }
+        .label { font-size: var(--fs-note); letter-spacing: .01em; text-transform: none; color: var(--muted); font-weight: 600; }
+        .row-head .tag { background: var(--card-2); border: var(--rule); height: 24px; }
+
+        /* ---- KPIs --------------------------------------------------------------- */
+        .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--line-2); }
+        .kpi { padding: 16px calc(var(--inset) - 2px) 15px; background: var(--card); }
+        .kpi b { font: 650 calc(var(--fs-figure) - 1px)/1.12 var(--num); letter-spacing: -.03em; }
+        .kpi span { font-size: var(--fs-note); font-weight: 500; margin-top: 6px; }
+        .kpi small { font-size: var(--fs-note); margin-top: 4px; font-variant-numeric: tabular-nums; }
+        .mt { margin-top: 14px; }
+
+        /* ---- agents: the matrix rows sit taller, the path is a quiet line ------ */
+        #agentsGrid .row { min-height: 60px; }
+        #agentsGrid .row .name { font-weight: 600; font-size: calc(var(--fs-body) + 0.5px); }
+        #agentsGrid .row .sub { display: flex; gap: 10px; min-width: 0; }
+
+        /* a credential file's name is an identifier, not a sentence: let it shrink */
+
+
+
+
+
+
+
+
+
+
+

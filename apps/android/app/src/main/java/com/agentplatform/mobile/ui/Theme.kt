@@ -97,16 +97,13 @@ object OrcaSpace {
 
     /** Minimum touch target meeting Android 48dp accessibility guidance. */
     val touch = 48.dp
-
-    /** Height reserved for the fixed bottom bar, above the system inset. */
-    val bottomBar = 60.dp
 }
 
 object OrcaRadius {
-    val card = 16.dp
-    val button = 10.dp
-    val input = 10.dp
-    val tile = 12.dp
+    val card = 18.dp
+    val button = 12.dp
+    val input = 14.dp
+    val tile = 14.dp
     val pill = 100.dp
 }
 
@@ -175,24 +172,24 @@ private val OrcaTypography =
         headlineLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.ExtraBold,
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 26.sp,
-                lineHeight = 31.sp,
-                letterSpacing = (-0.7).sp,
+                lineHeight = 32.sp,
+                letterSpacing = (-0.5).sp,
             ),
         headlineMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 21.sp,
-                lineHeight = 26.sp,
+                lineHeight = 27.sp,
                 letterSpacing = (-0.3).sp,
             ),
         titleLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
-                fontSize = 19.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
                 lineHeight = 24.sp,
                 letterSpacing = (-0.2).sp,
             ),
@@ -300,6 +297,11 @@ fun AgentPlatformTheme(
                 background = palette.bgBase,
                 onBackground = palette.textPrimary,
                 surface = palette.bgPanel,
+                surfaceContainerLowest = palette.bgBase,
+                surfaceContainerLow = palette.bgPanel,
+                surfaceContainer = palette.bgPanel,
+                surfaceContainerHigh = palette.bgRaised,
+                surfaceContainerHighest = palette.bgOverlay,
                 onSurface = palette.textPrimary,
                 surfaceVariant = palette.bgRaised,
                 onSurfaceVariant = palette.textSecondary,
@@ -320,6 +322,11 @@ fun AgentPlatformTheme(
                 background = palette.bgBase,
                 onBackground = palette.textPrimary,
                 surface = palette.bgPanel,
+                surfaceContainerLowest = palette.bgBase,
+                surfaceContainerLow = palette.bgPanel,
+                surfaceContainer = palette.bgPanel,
+                surfaceContainerHigh = palette.bgRaised,
+                surfaceContainerHighest = palette.bgOverlay,
                 onSurface = palette.textPrimary,
                 surfaceVariant = palette.bgRaised,
                 onSurfaceVariant = palette.textSecondary,

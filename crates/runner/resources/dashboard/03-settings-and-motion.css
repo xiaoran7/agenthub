@@ -1,0 +1,423 @@
+        /* Settings gear button & themes */
+        .settings-btn svg { transition: transform var(--dur-3) var(--ease-spring); }
+        .settings-btn:hover svg { transform: rotate(45deg); }
+        .theme-segs { display: inline-flex; }
+
+        /* ---- the settings page --------------------------------------------- */
+        /* magpie's Settings, on this console's page model: a tab per part at
+           the head of the page (the same small-caps tabs as its warm-ups), the
+           part's rows under it, and a box that searches every part at once.
+           The page scrolls in place; the head stays at its top. */
+        /* the settings head is pinned flush to the page's top edge: the view's
+           own 16px top padding would otherwise leave a strip of scrolling
+           content above it. It covers that strip with its own background, and
+           the page's rows start under it. */
+        .set-head {
+          position: sticky; top: -16px; z-index: 6;
+          min-height: 44px; flex-wrap: wrap; gap: 6px;
+          margin: 0 calc(-1 * var(--view-pad));
+          padding: 12px var(--view-pad) 8px;
+          background: var(--bg);
+          border-bottom: 0;
+        }
+        /* a hairline appears only once the rows are under the head, so the
+           page does not open with a rule nothing has crossed yet */
+        .set-head::after {
+          content: ""; position: absolute; left: var(--view-pad); right: var(--view-pad); bottom: 0;
+          height: 1px; background: var(--line-2); opacity: 0; transition: opacity var(--dur-2) var(--ease);
+        }
+        .view-settings.scrolled .set-head::after { opacity: 1; }
+        .set-tabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; row-gap: 2px; min-width: 0; margin-left: -7px; }
+        .set-tabs button {
+          flex: none; white-space: nowrap; height: 26px; padding: 0 9px; border-radius: 7px;
+          font-size: var(--fs-note); font-weight: 600; color: var(--muted);
+          transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+        }
+        .set-tabs button:hover:not(.on) { color: var(--fg-2); background: color-mix(in srgb, var(--fg) 4%, transparent); }
+        .set-tabs button.on { color: var(--fg); background: var(--pill); }
+        .set-q { flex: 0 1 180px; margin-left: auto; min-width: 120px; height: 28px; }
+        .set-searching .set-tabs { display: none; }
+        .set-searching .set-q { flex: 1 1 100%; width: 100%; margin-left: 0; }
+        .set-searching .set-page::before {
+          content: attr(data-part); display: block; margin: 6px 2px 6px;
+          font-size: calc(var(--fs-note) - 1px); font-weight: 600;
+          letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+        }
+        .set-none { margin: 24px 2px; font-size: var(--fs-body); color: var(--muted); text-align: center; }
+        .set-page { display: flex; flex-direction: column; flex: none; }
+        .set-page[hidden] { display: none; }
+        .set-miss { display: none !important; }
+        .set-page > .list:not(:last-child) { margin-bottom: 10px; }
+
+        /* one preference a row: what it is and why on the left, its control on
+           the right, as magpie's .row.pref — never a control without a label */
+        .list.prefs { background: var(--card); }
+        .row.pref { min-height: 54px; padding: 12px var(--inset); gap: 16px; align-items: center; }
+        .row.pref .who { flex: 1 1 auto; min-width: 0; }
+        .row.pref .name { font-weight: 550; font-size: var(--fs-body); }
+        .row.pref .sub {
+          margin-top: 2px; font-size: var(--fs-note); color: var(--muted); line-height: 1.45;
+          white-space: normal; overflow: visible; text-overflow: clip;
+        }
+        .row.pref .sub.mono { font-family: var(--code); font-size: calc(var(--fs-note) - 1px); word-break: break-all; }
+        .row.pref .segs { flex: none; margin-left: auto; }
+        .row.pref > .text.action { flex: none; }
+        /* the one row that ends the daemon reads in the red the rail's dot
+           turns to when the link is down */
+        .row.pref.danger .name { color: var(--red); }
+        .text.action.danger { color: var(--red); border-color: var(--red-soft); background: var(--red-soft); }
+        .text.action.danger:hover { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+
+        /* the pairing form, under the device's own facts */
+        .pref-form {
+          display: grid; grid-template-columns: 84px minmax(0, 1fr);
+          gap: 10px 14px; align-items: center;
+          padding: 14px var(--inset) 16px; border-top: var(--rule-2);
+        }
+        .pref-form label { font-size: var(--fs-note); color: var(--fg-2); text-align: right; }
+        .pref-form input {
+          height: 32px; padding: 0 10px; border-radius: var(--r-s);
+          border: 1px solid var(--line); background: var(--card-2);
+          font-size: var(--fs-body); outline: none; min-width: 0;
+          user-select: text; -webkit-user-select: text;
+        }
+        .pref-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+        .pref-form input::placeholder { color: var(--faint); }
+        .pref-form .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+
+        /* Modern inline-edit group for device settings */
+        .inline-edit-group {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          flex: none;
+        }
+        .inline-edit-wrap {
+          display: inline-flex;
+          align-items: center;
+          position: relative;
+          height: 32px;
+          background: var(--card-2);
+          border: 1px solid var(--line);
+          border-radius: var(--r-s);
+          padding: 0 10px 0 32px;
+          transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-3) var(--ease-spring), background var(--dur-2) var(--ease);
+        }
+        .inline-edit-wrap:hover {
+          border-color: var(--muted);
+        }
+        .inline-edit-wrap:focus-within {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+          background: var(--card);
+        }
+        .inline-edit-ic {
+          position: absolute;
+          left: 10px;
+          width: 14px;
+          height: 14px;
+          color: var(--muted);
+          pointer-events: none;
+          transition: color var(--dur-2) var(--ease);
+        }
+        .inline-edit-wrap:focus-within .inline-edit-ic {
+          color: var(--accent);
+        }
+        .inline-edit-input {
+          border: none;
+          outline: none;
+          background: transparent;
+          height: 100%;
+          width: 160px;
+          font-size: var(--fs-body);
+          color: var(--fg);
+          font-family: inherit;
+          padding: 0;
+          user-select: text;
+          -webkit-user-select: text;
+        }
+        .inline-edit-input::placeholder {
+          color: var(--faint);
+        }
+        .inline-edit-btn {
+          height: 32px;
+          border-radius: var(--r-s);
+          padding: 0 14px;
+          font-weight: 500;
+          font-size: var(--fs-note);
+        }
+
+        @container view-q (max-width: 560px) {
+          .pref-form { grid-template-columns: minmax(0, 1fr); }
+          .pref-form label { text-align: left; }
+          .row.pref { flex-wrap: wrap; row-gap: 8px; }
+          .row.pref .who { flex: 1 1 100%; }
+          .row.pref .segs, .row.pref > .text.action { margin-left: 0; }
+          .row.pref .inline-edit-group { width: 100%; }
+          .row.pref .inline-edit-wrap { flex: 1 1 auto; width: auto; }
+          .row.pref .inline-edit-input { width: 100%; }
+        }
+
+
+        /* ---- capabilities view: unified multi-agent library (skills, mcp, hooks) ---- */
+
+        /* Filter bar & search */
+        .cap-filter-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .cap-segs { display: inline-flex; }
+        .cap-search-wrap { display: flex; align-items: center; position: relative; min-width: 260px; flex: 1; max-width: 400px; }
+        .cap-search-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; display: flex; align-items: center; }
+        .cap-search-input { width: 100%; height: 32px; padding: 0 12px 0 32px; border-radius: var(--r-s); border: var(--rule); background: var(--card); color: var(--fg); font-size: var(--fs-note); outline: none; transition: border-color var(--dur-2), box-shadow var(--dur-2); }
+        .cap-search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+        /* One capability a row, read as a session row is: title, one line of
+           facts, a value that copies, and who has it. A card grid with its own
+           hover lift, icon chips and coloured event badges read as a second
+           design system inside this one, and a long path wrapped out of its
+           card; a list cannot. */
+        .cap-rows { display: flex; flex-direction: column; }
+        .cap-row { align-items: flex-start; padding: 10px var(--inset, 14px); gap: 14px; }
+        .cap-row .who { flex: 1 1 auto; min-width: 0; }
+        .cap-row .name-line { gap: 8px; }
+        .cap-row .name { font-weight: 500; font-size: var(--fs-body); }
+        .cap-row .sub { margin-top: 2px; }
+        .cap-row .sub.flow { display: flex; align-items: center; gap: 0; min-width: 0; }
+        .cap-row .sub.flow > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cap-copy {
+          display: block; width: 100%; margin-top: 5px; padding: 0; border: 0; background: none;
+          font-family: var(--code); font-size: calc(var(--fs-note) - 1.5px); color: var(--faint);
+          text-align: left; cursor: pointer; min-width: 0;
+        }
+        .cap-copy-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cap-copy:hover .cap-copy-text { color: var(--accent); }
+        .cap-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 42%; }
+        .cap-agents { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .cap-agent { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-note); color: var(--muted); white-space: nowrap; }
+        .cap-agents-none { font-size: var(--fs-note); color: var(--faint); }
+        .cap-meta { font-size: calc(var(--fs-note) - 1.5px); color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .cap-live { display: inline-flex; align-items: center; gap: 5px; font-size: calc(var(--fs-note) - 1.5px); color: var(--green); }
+        .cap-live i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+        @container view-q (max-width: 560px) {
+          .cap-side { max-width: 100%; align-items: flex-start; }
+          .cap-row { flex-wrap: wrap; row-gap: 6px; }
+          .cap-agents { justify-content: flex-start; }
+        }
+
+        /* ---- empty states are invitations, not placeholders -------------------- */
+        .empty-state { padding: 48px 24px 44px; text-align: left; max-width: 500px; margin: 0 auto; }
+        .empty-state b { display: block; font: 650 var(--fs-title)/1.4 var(--font); color: var(--fg); margin-bottom: 6px; }
+        .empty-state span.why { display: block; font-size: var(--fs-body); line-height: 1.7; color: var(--muted); }
+        .empty-state .retry { margin-top: 16px; display: inline-flex; }
+
+        /* ---- toast: one line of feedback where the action happened -------------- */
+        .toast {
+          position: fixed; left: 50%; bottom: 40px; z-index: 40;
+          transform: translate(-50%, 10px) scale(.97); opacity: 0; pointer-events: none;
+          display: flex; align-items: center; gap: 9px; max-width: min(560px, calc(100vw - 40px));
+          padding: 11px 15px; border-radius: var(--r-s);
+          border: var(--rule); background: var(--card); color: var(--fg);
+          font-size: var(--fs-body); line-height: 1.5;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, .14), 0 1px 3px rgba(0, 0, 0, .06);
+          transition: opacity var(--dur-2) var(--ease), transform var(--dur-3) var(--ease-spring);
+          will-change: transform;
+        }
+        .toast.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
+        .toast::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); transition: background var(--dur-2), box-shadow var(--dur-2); }
+        .toast.err::before { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+
+
+        /* ---- modals ------------------------------------------------------------ */
+        .modal .dialog { border-radius: calc(var(--r) + 4px); }
+        .editor { padding: 20px 22px 18px; gap: 12px 16px; }
+        .editor .ehead b { font-size: calc(var(--fs-body) + 1px); }
+        .editor label { font-size: var(--fs-note); }
+        .editor input[type="text"], .editor input[type="password"] { height: 34px; border-radius: var(--r-s); font-size: var(--fs-body); }
+
+        /* ---- focus and reduced motion ------------------------------------------ */
+        button:focus-visible, input:focus-visible, .group-head:focus-visible {
+          outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 8px;
+        }
+        .group-head { cursor: default; }
+        @media (prefers-reduced-motion: reduce) {
+          .view { animation-name: none; }
+          .led-strip .blk.cta::after, .group-head .chev, .live > i, .toast { transition: none; }
+        }
+        /* a narrow window: the header's switch folds into its pages, the tables
+           drop their share column, and the tiles stand two by two. Both boxes
+           are the page's own measure (the view beside the rail, the window in
+           the header), never the window's, so the rail's width counts here */
+        .view { container: view-q / inline-size; }
+        .view-slot { container: slot-q / inline-size; }
+        @container view-q (max-width: 760px) {
+          .live { display: none; }
+          .led-strip { grid-template-columns: 1fr 1fr; }
+          .led-strip .blk:nth-child(3) { border-left: 0; border-top: var(--rule-2); }
+          .led-strip .blk:nth-child(4) { border-top: var(--rule-2); }
+          .tools .inp { width: auto; flex: 1 1 auto; min-width: 0; }
+          #sessionsContainer .row .sub .tokens { display: none; }
+          #sessionsContainer .row .when,
+          #sessionsContainer .row .who .when { width: auto; max-width: 140px; }
+          #sessionsContainer .group-head .gpath { display: none; }
+          .stats { grid-template-columns: 1fr 1fr; }
+          .row.stat,
+          #modelsGrid .row.stat { grid-template-columns: 22px minmax(0, 1fr) 104px auto; }
+          .row.stat .share { display: none; }
+          .row.stat .num { grid-column: 3; }
+          .row.stat .cost { grid-column: 4; }
+        }
+    /* ---- small marks the markup asks for by name, never by inline style --- */
+    .ic.accent { color: var(--accent); }
+    .ic.sm { width: 15px; height: 15px; }
+    .mono.faint { color: var(--faint); }
+    .icon.push { margin-left: auto; }
+    .center-note.dim { color: var(--faint); font-size: calc(var(--fs-note) - 1px); }
+    .dialog.narrow { width: min(400px, 100%); }
+    .editor.center { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 10px; }
+    .round { width: 44px; height: 44px; }
+    .round svg { width: 22px; height: 22px; }
+    .center-title { font-size: var(--fs-title); }
+    .center-note { font-size: var(--fs-body); }
+
+/* ============================================================================
+   Arrangement: where the pages live — the rail beside the window, or one
+   rounded track in the header with the brand beside the toggle. The toggle
+   writes .side-nav on <body> and .no-side on <html>; both are read here, so a
+   click, a remembered choice and a resize all land in the same place.
+   ========================================================================== */
+.sidebar { display: none; }
+body.side-nav .sidebar { display: flex; }
+
+body.side-nav .top #brandTop { display: none; }
+body.side-nav .top #sideToggle { display: none; }
+body.side-nav .top #topCrumb { display: flex; }
+body.side-nav .top .top-slot { display: none; }
+
+body:not(.side-nav) .top #brandTop { display: flex; }
+body:not(.side-nav) .top #sideToggle { display: inline-flex; }
+body:not(.side-nav) .top #topCrumb { display: none; }
+body:not(.side-nav) .top .top-slot { display: flex; }
+
+/* ============================================================================
+   Motion pass: the console answers the hand. Every rule here is a transition
+   or a first-paint animation on something the reader already uses — nothing
+   new is drawn, and nothing moves on its own while the page sits still. The
+   vocabulary is the three curves declared with the tokens (--ease-out for
+   things that settle, --ease-spring for things that travel, --ease-tap for
+   things pressed); a reader who asked for less motion gets the end state at
+   once.
+   ========================================================================== */
+/* ---- the page turns as one sheet (switchView's view transition) ----------- */
+/* only the page column is named, so the header, the rail and the footer are
+   not part of the motion: they stay exactly where they are while the page
+   turns under them. The old page leaves quickly and a little upward; the new
+   one arrives from below on the long ease-out. */
+.view-slot { view-transition-name: page; }
+::view-transition-group(root) { animation: none; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-group(page) { animation-duration: .36s; animation-timing-function: var(--ease-spring); }
+::view-transition-old(page) { animation: page-out .16s var(--ease-tap) both; }
+::view-transition-new(page) { animation: page-in .34s var(--ease-out) both; }
+@keyframes page-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(page), ::view-transition-old(page), ::view-transition-new(page) { animation: none !important; }
+}
+
+/* ---- the rail ------------------------------------------------------------ */
+/* the page rows answer the pointer: the name leans in, the glyph lifts */
+#nav button[data-view] { transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease); }
+#nav button[data-view] > span { transition: transform var(--dur-3) var(--ease-spring); }
+#nav button[data-view]:hover > span { transform: translateX(2px); }
+.side-gw { transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease); }
+.side-gw:active { transform: scale(.985); }
+/* the link dot breathes while the link is up, and stops the moment it is not */
+.side-gw > i, .live > i { transition: background var(--dur-3) var(--ease), box-shadow var(--dur-3) var(--ease); }
+:root:not(.link-off) .side-gw:not(.off) > i { animation: link-breathe 2.6s var(--ease) infinite; }
+.live:not(.off):not(.stale) > i { animation: link-breathe 2.6s var(--ease) infinite; }
+@keyframes link-breathe {
+  0%, 100% { box-shadow: 0 0 0 3px var(--green-soft); }
+  50% { box-shadow: 0 0 0 4.5px color-mix(in srgb, var(--green-soft) 55%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.link-off) .side-gw:not(.off) > i, .live:not(.off):not(.stale) > i { animation: none; }
+}
+
+/* ---- the ledger and the KPI tiles ---------------------------------------- */
+/* a tile is a surface the pointer can land on: it lifts a hair and its
+   figures warm up; the unpaired tile's arrow steps toward the page it opens */
+.led-strip .blk { transition: background var(--dur-2) var(--ease); }
+.led-strip .blk.clickable { transition: background var(--dur-2) var(--ease), transform var(--dur-3) var(--ease-spring); }
+.led-strip .blk.clickable:hover { transform: translateY(-1px); }
+.led-strip .blk.clickable:active { transform: translateY(0) scale(.995); }
+.led-strip .v { transition: color var(--dur-3) var(--ease); }
+.led-strip .blk.clickable:hover .v { color: var(--accent); }
+.kpi { transition: background var(--dur-2) var(--ease); }
+.kpi:hover { background: var(--card-2); }
+.kpi b { transition: color var(--dur-3) var(--ease); }
+.kpi:hover b { color: var(--accent); }
+
+/* ---- rows, tags and section heads ---------------------------------------- */
+/* a session row is a place the reader can land: the title takes the accent's
+   ink and the time column comes out of the faint, without moving the row */
+#sessionsContainer .row { transition: background var(--dur-2) var(--ease); }
+#sessionsContainer .row:hover { background: color-mix(in srgb, var(--accent) 4.5%, transparent); }
+#sessionsContainer .row .name { transition: color var(--dur-2) var(--ease); }
+#sessionsContainer .row:hover .name { color: var(--accent); }
+#sessionsContainer .row .who .when, #sessionsContainer .row .model { transition: color var(--dur-2) var(--ease); }
+#sessionsContainer .row:hover .who .when, #sessionsContainer .row:hover .model { color: var(--muted); }
+#sessionsContainer .row .ic > svg { transition: transform var(--dur-3) var(--ease-spring); }
+#sessionsContainer .row:hover .ic > svg { transform: scale(1.1); }
+/* the folder mark of a group lifts with its head */
+.group-head > .ic { transition: transform var(--dur-3) var(--ease-spring); }
+.group-head:hover > .ic { transform: translateY(-1px); }
+/* the catalog rows: the icon leans with the row, the figures stay put */
+#modelsGrid .row .ic, #agentsGrid .row .ic { transition: transform var(--dur-3) var(--ease-spring); }
+#modelsGrid .row:hover .ic, #agentsGrid .row:hover .ic { transform: scale(1.1) rotate(-2deg); }
+
+/* ---- buttons and the fields they sit beside ------------------------------ */
+.text.action { transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease), color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease), transform var(--dur-2) var(--ease-spring); }
+.text.action:hover { box-shadow: 0 2px 6px rgba(20, 22, 30, .07); }
+.text.action:active:not(:disabled) { transform: scale(.965); }
+.text.action.primary { box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.text.action.primary:hover { box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 28%, transparent); }
+.text.action:disabled { transform: none; }
+/* a button that is working says so: its glyph turns while the request is out */
+.icon.busy svg, .text.action.busy .ic, .text.action.busy .ic svg, .text.action.busy svg.ic, .action.busy svg { animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .icon.busy svg, .text.action.busy .ic, .text.action.busy .ic svg, .text.action.busy svg.ic, .action.busy svg, .icon.spin svg { animation: none; opacity: .6; }
+}
+
+/* ---- the modal, its fields and the toast --------------------------------- */
+/* the sheet behind the dialog dims in with it, and the dialog settles onto
+   the page rather than being stamped there (dashboard.css .modal.open) */
+.modal .dialog { will-change: transform; }
+.editor .ok-box { animation: rise-in var(--dur-3) var(--ease-out) both; }
+.editor input:focus { transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-3) var(--ease-spring); }
+/* the shutdown sheet's mark keeps a slow turn while the runner lets go —
+   and only then: a sheet that is not on screen costs nothing */
+#shutdownModal.open .round svg { animation: spin 3.2s linear infinite; }
+@media (prefers-reduced-motion: reduce) { #shutdownModal.open .round svg { animation: none; } }
+
+/* ---- the first paint ----------------------------------------------------- */
+/* the console is drawn once on open: the rail's rows and the page's blocks
+   arrive in order. This runs on load only — the class is taken off after the
+   first frame, so a poll never re-plays it. */
+html.booting .sidebar { animation: side-in var(--dur-4) var(--ease-spring) both; }
+html.booting .view.active > * { animation: rise-in var(--dur-4) var(--ease-out) both; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(9px); } }
+html.booting .view.active > *:nth-child(1) { animation-delay: 40ms; }
+html.booting .view.active > *:nth-child(2) { animation-delay: 90ms; }
+html.booting .view.active > *:nth-child(3) { animation-delay: 140ms; }
+html.booting .view.active > *:nth-child(4) { animation-delay: 190ms; }
+html.booting #nav button[data-view] { animation: row-in var(--dur-3) var(--ease-out) both; }
+html.booting #nav button[data-view]:nth-of-type(1) { animation-delay: 60ms; }
+html.booting #nav button[data-view]:nth-of-type(2) { animation-delay: 90ms; }
+html.booting #nav button[data-view]:nth-of-type(3) { animation-delay: 120ms; }
+html.booting #nav button[data-view]:nth-of-type(4) { animation-delay: 150ms; }
+html.booting #nav button[data-view]:nth-of-type(5) { animation-delay: 180ms; }
+html.booting #nav button[data-view]:nth-of-type(6) { animation-delay: 210ms; }
+@keyframes side-in { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes row-in { from { opacity: 0; transform: translateX(-6px); } }
+@media (prefers-reduced-motion: reduce) {
+  html.booting .sidebar, html.booting .view.active > *, html.booting #nav button[data-view] { animation: none; }
+}
+

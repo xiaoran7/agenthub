@@ -210,45 +210,48 @@ pub fn parse_mcp_from_codex_toml(path: &Path, out: &mut Vec<McpServerItem>) {
             continue;
         }
 
-        if trimmed.starts_with("[mcp_servers.") && trimmed.ends_with(']') {
-            let section = &trimmed[13..trimmed.len() - 1];
-            // If it's a subtable like [mcp_servers.foo.env], don't treat as new server
-            if section.contains('.') {
-                continue;
-            }
-
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if let Some(srv) = current_server.take() {
                 out.push(srv);
             }
-
-            let name = section.to_string();
-            current_server = Some(McpServerItem {
-                id: format!("codex:{}", name),
-                name,
-                transport: "stdio".to_string(),
-                command: None,
-                args: Vec::new(),
-                env: HashMap::new(),
-                url: None,
-                headers: HashMap::new(),
-                source: "codex".to_string(),
-                agents: vec!["Codex".to_string()],
-                status: "active".to_string(),
-            });
+            if let Some(section) = trimmed
+                .strip_prefix("[mcp_servers.")
+                .and_then(|s| s.strip_suffix(']'))
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && !s.contains('.'))
+            {
+                let name = section.trim_matches('"').trim_matches('\'').to_string();
+                current_server = Some(McpServerItem {
+                    id: format!("codex:{}", name),
+                    name,
+                    transport: "stdio".to_string(),
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    url: None,
+                    headers: HashMap::new(),
+                    source: "codex".to_string(),
+                    agents: vec!["Codex".to_string()],
+                    status: "active".to_string(),
+                });
+            }
             continue;
         }
 
-        if let Some(ref mut srv) = current_server {
-            if let Some(val) = trimmed.strip_prefix("command") {
-                let eq = val.trim_start().strip_prefix('=').unwrap_or(val).trim();
-                srv.command = Some(parse_toml_string_literal(eq));
-            } else if let Some(val) = trimmed.strip_prefix("url") {
-                let eq = val.trim_start().strip_prefix('=').unwrap_or(val).trim();
-                srv.url = Some(parse_toml_string_literal(eq));
-                srv.transport = "http".to_string();
-            } else if let Some(val) = trimmed.strip_prefix("args") {
-                let eq = val.trim_start().strip_prefix('=').unwrap_or(val).trim();
-                if eq.starts_with('[') && eq.ends_with(']') {
+        if let Some(ref mut srv) = current_server
+            && let Some((raw_key, raw_val)) = trimmed.split_once('=')
+        {
+            let key = raw_key.trim();
+            let eq = raw_val.trim();
+            match key {
+                "command" => {
+                    srv.command = Some(parse_toml_string_literal(eq));
+                }
+                "url" => {
+                    srv.url = Some(parse_toml_string_literal(eq));
+                    srv.transport = "http".to_string();
+                }
+                "args" if eq.starts_with('[') && eq.ends_with(']') => {
                     let inner = &eq[1..eq.len() - 1];
                     srv.args = inner
                         .split(',')
@@ -256,6 +259,7 @@ pub fn parse_mcp_from_codex_toml(path: &Path, out: &mut Vec<McpServerItem>) {
                         .filter(|s| !s.is_empty())
                         .collect();
                 }
+                _ => {}
             }
         }
     }
@@ -601,6 +605,14 @@ pub fn register_agenthub_mcp_server(
     fs::write(&mcp_path, serialized).map_err(|e| format!("write_mcp_json_error: {}", e))?;
     invalidate_capabilities_cache();
 
+    let redacted_headers: HashMap<String, String> = headers
+        .into_iter()
+        .map(|(k, v)| {
+            let redacted = redact_mcp_secret(&k, &v);
+            (k, redacted)
+        })
+        .collect();
+
     Ok(McpServerItem {
         id: format!("agenthub:{}", name),
         name: name.to_string(),
@@ -609,7 +621,7 @@ pub fn register_agenthub_mcp_server(
         args,
         env: HashMap::new(),
         url,
-        headers,
+        headers: redacted_headers,
         source: "agenthub".to_string(),
         agents: vec![
             "AgentHub".to_string(),

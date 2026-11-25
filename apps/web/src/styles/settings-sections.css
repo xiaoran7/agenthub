@@ -1,0 +1,414 @@
+/* Small uppercase label above a dialog or page title. */
+.eyebrow {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.settings-page .eyebrow {
+  color: var(--remote-muted);
+}
+/* Destructive actions: revoking a session, member, invitation or device. */
+.danger-button {
+  background: rgb(226 110 118 / 12%);
+  border: 1px solid rgb(226 110 118 / 45%);
+  color: var(--danger);
+}
+.danger-button:hover:not(:disabled) {
+  background: rgb(226 110 118 / 20%);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.danger-button:disabled {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.settings-page .danger-button {
+  background: rgb(255 170 164 / 10%);
+  border-color: rgb(255 170 164 / 38%);
+  color: var(--remote-red);
+}
+.settings-page .danger-button:hover:not(:disabled) {
+  background: rgb(255 170 164 / 20%);
+  border-color: var(--remote-red);
+  color: var(--remote-red);
+}
+.settings-page .danger-button:disabled {
+  background: transparent;
+  border-color: var(--remote-line);
+  color: var(--remote-muted);
+}
+/* Online/offline status dot shown on device rows, chips and filter cards. */
+.device-dot {
+  background: var(--text-muted);
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 8px;
+  width: 8px;
+}
+.device-dot[data-online="true"] {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgb(131 214 155 / 14%);
+}
+.settings-page .device-dot {
+  background: var(--remote-muted);
+}
+.settings-page .device-dot[data-online="true"] {
+  background: var(--remote-green);
+  box-shadow: 0 0 0 3px rgb(126 213 160 / 16%);
+}
+/* Config validation failure raised by the settings form submit handler. */
+.settings-form-error {
+  background: rgb(226 110 118 / 10%);
+  border: 1px solid rgb(226 110 118 / 40%);
+  border-radius: 7px;
+  color: var(--danger);
+  display: block;
+  margin: 16px 0 0;
+  padding: 9px 10px;
+}
+.settings-page .settings-form-error {
+  background: rgb(255 170 164 / 10%);
+  border-color: rgb(255 170 164 / 40%);
+  color: var(--remote-red);
+}
+.verification-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--background);
+  color: var(--text-primary);
+}
+.verification-panel {
+  width: min(100%, 520px);
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+  padding: clamp(28px, 6vw, 48px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl, 20px);
+  background: var(--surface);
+  box-shadow: var(--remote-modal-shadow, 0 18px 52px rgba(0, 0, 0, 0.08));
+  animation: account-fade-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.verification-panel h1,
+.verification-panel p {
+  margin: 0;
+}
+.verification-panel h1 {
+  font-family: var(--font-serif);
+  font-size: clamp(28px, 4vw, 36px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  color: var(--remote-ink);
+}
+.verification-panel > p:last-of-type {
+  max-width: 42ch;
+  color: var(--text-muted);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.verification-signal {
+  width: 34px;
+  height: 34px;
+  margin-top: 14px;
+  border: 2.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+.verification-signal[data-status="checking"] {
+  border-top-color: var(--remote-terracotta);
+  animation: verification-spin 0.8s linear infinite;
+}
+.verification-signal[data-status="ready"] {
+  border-color: var(--remote-terracotta);
+  box-shadow: inset 0 0 0 8px var(--surface);
+}
+.verification-signal[data-status="verified"] {
+  border-color: var(--remote-green);
+  background: var(--remote-green);
+  box-shadow: inset 0 0 0 8px var(--surface);
+}
+.verification-signal[data-status="failed"] {
+  border-color: var(--remote-red);
+  background: var(--remote-red);
+  box-shadow: inset 0 0 0 8px var(--surface);
+}
+.verification-return {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin-top: 16px;
+  padding: 0 22px;
+  border: 1px solid var(--remote-terracotta);
+  background: var(--remote-terracotta);
+  border-radius: var(--radius-md, 10px);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(217, 119, 87, 0.28);
+  cursor: pointer;
+  transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.verification-return:hover {
+  background: var(--remote-terracotta-hover);
+  border-color: var(--remote-terracotta-hover);
+  transform: translateY(-1.5px);
+  box-shadow: 0 4px 14px rgba(217, 119, 87, 0.38);
+}
+.verification-return:active {
+  transform: scale(0.98);
+}
+.reset-password-form {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+}
+.reset-password-form label {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+.reset-password-form label > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.reset-password-form input {
+  background: var(--background);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  min-height: 44px;
+  padding: 0 12px;
+}
+@keyframes verification-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 520px) {
+  .verification-panel h1 {
+    font-size: 30px;
+  }
+
+  .account-security-status {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .account-session-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-password-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-page-content .audit-section-heading {
+    /* `.settings-page-content .settings-section-heading` is a flex container, so
+       the grid placement below only applies once the display is switched. */
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .settings-page-content .audit-scope-switch {
+    /* The switch sizes itself to its labels, so it cannot share the shrunken
+       text column. Give it its own row, starting under the text. */
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: 2px;
+  }
+
+  .audit-event-row {
+    align-items: start;
+    grid-template-columns: 8px minmax(0, 1fr);
+  }
+
+  .audit-event-row time {
+    grid-column: 2;
+  }
+
+  .account-security-status > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .account-session-row > button {
+    grid-column: 1;
+    justify-self: start;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .verification-signal[data-status="checking"] {
+    animation: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+@media (max-width: 1380px) {
+  .session-row {
+    grid-template-columns:
+      84px minmax(150px, 1.2fr) minmax(104px, 0.8fr)
+      minmax(112px, 0.8fr) minmax(125px, 1fr) 66px 70px;
+  }
+}
+@media (max-width: 919px) {
+  .page-body {
+    padding: 22px 16px 92px;
+  }
+
+  .session-row {
+    display: grid;
+    gap: 6px 9px;
+    grid-template-areas:
+      "identity status"
+      "task task"
+      "provider last";
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 100px;
+    padding: 12px 13px;
+  }
+
+  .settings-page-header {
+    padding: max(14px, env(safe-area-inset-top, 0px)) 16px 12px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .settings-page-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-page-nav {
+    border-bottom: 1px solid var(--remote-line);
+    border-right: 0;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 16px;
+    scrollbar-width: none;
+  }
+
+  .settings-page-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-page-nav button {
+    border: 1px solid var(--remote-line);
+    border-radius: 999px;
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 0 14px 0 8px;
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .settings-page-content {
+    max-width: none;
+    padding: 2px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .settings {
+    border-radius: 14px 14px 0 0;
+    max-height: 92dvh;
+  }
+}
+/* Plugin Marketplace Card */
+.settings-plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
+  border-radius: var(--radius-lg, 12px);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  margin-top: 10px;
+}
+.settings-plugin-card:hover {
+  border-color: var(--remote-line-hover, var(--remote-line));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+}
+.settings-plugin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-plugin-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-plugin-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--remote-ink);
+  margin: 0;
+}
+.settings-plugin-version {
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  color: var(--remote-secondary);
+  background: var(--remote-surface-muted, rgba(160, 168, 185, 0.12));
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+.settings-plugin-desc {
+  font-size: 13px;
+  color: var(--remote-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+.settings-plugin-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--remote-line);
+}
+.settings-plugin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 9999px;
+}
+.settings-plugin-badge.ready {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+.settings-plugin-badge.disabled {
+  background: var(--remote-surface-muted, rgba(160, 168, 185, 0.1));
+  color: var(--remote-secondary);
+}
+.settings-plugin-badge.downloading {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+.settings-plugin-badge.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}

@@ -169,3 +169,44 @@ fn validated_upstream_candidate_filters_placeholders_mismatched_ccs_and_unreacha
     drop(listener);
     assert!(validated_upstream_candidate(&open_base, "sk-live", "CPA").is_none());
 }
+#[test]
+fn save_disk_cache_to_writes_atomically_without_leaving_temp_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_path = dir.path().join("models_cache.json");
+    let model = LiveCatalogModel {
+        id: "claude-opus-4-6".to_owned(),
+        name: "claude-opus-4-6".to_owned(),
+        display_name: "Claude Opus 4.6".to_owned(),
+        context_length: 200_000,
+        context_window_str: "200K".to_owned(),
+        max_output_tokens: Some(32_000),
+        input_modalities: vec!["text".to_owned()],
+        output_modalities: vec!["text".to_owned()],
+        supports_reasoning: true,
+        supports_tools: true,
+        supports_vision: true,
+        upstream_provider: "Magpie".to_owned(),
+    };
+    disk_cache::save_disk_cache_to(
+        &cache_path,
+        "http://127.0.0.1:3425",
+        "Magpie",
+        std::slice::from_ref(&model),
+    )
+    .unwrap();
+    disk_cache::save_disk_cache_to(&cache_path, "http://127.0.0.1:3425", "Magpie", &[model])
+        .unwrap();
+
+    let raw = fs::read_to_string(&cache_path).unwrap();
+    let parsed: DiskModelCache = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed.schema_version, DISK_MODEL_CACHE_VERSION);
+    assert_eq!(parsed.models.len(), 1);
+    assert_eq!(parsed.models[0].id, "claude-opus-4-6");
+
+    let entries: Vec<_> = fs::read_dir(dir.path()).unwrap().flatten().collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "no temporary files may linger after persist"
+    );
+}

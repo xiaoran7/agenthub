@@ -324,11 +324,14 @@ pub(crate) fn read_transcript_incremental(
         .len();
     if file_len < state.offset {
         let default_agent = state.default_agent;
+        let modified_ms = state.modified_ms;
         *state = TranscriptState {
             default_agent,
+            modified_ms,
             ..TranscriptState::default()
         };
     } else if file_len == state.offset {
+        state.seen_len = file_len;
         return Ok(());
     }
     if state.offset > 0 {
@@ -345,26 +348,23 @@ pub(crate) fn read_transcript_incremental(
 
     loop {
         line.clear();
-        let (bytes_read, terminated) = match read_line_with_delim(&mut reader, &mut line) {
-            Ok((0, _)) => break,
-            Ok(pair) => pair,
-            Err(_) => break,
-        };
-        if !terminated {
+        if line.capacity() > 512 * 1024 {
+            line = Vec::new();
+        }
+        let (bytes_read, terminated, oversized, last_non_ws) =
+            match read_bounded_ledger_line_with_tail(&mut reader, &mut line, LEDGER_LINE_LIMIT) {
+                Ok((0, ..)) => break,
+                Ok(tuple) => tuple,
+                Err(_) => break,
+            };
+        if !terminated && last_non_ws != Some(b'}') {
             // An unterminated tail at EOF is only committed if it already ends a
             // complete JSON object (`}`); otherwise a writer is mid-flush and
             // we keep `state.offset` right before it for the next poll.
-            let trimmed_end = line
-                .iter()
-                .rev()
-                .find(|&&b| !b.is_ascii_whitespace())
-                .copied();
-            if trimmed_end != Some(b'}') {
-                break;
-            }
+            break;
         }
         state.offset = state.offset.saturating_add(bytes_read as u64);
-        if line.len() > LEDGER_LINE_LIMIT {
+        if oversized {
             continue;
         }
         #[derive(Default, Deserialize)]
@@ -545,12 +545,19 @@ pub(crate) fn read_transcript_incremental(
         state.last_assistant_ms = state.last_assistant_ms.max(time);
     }
 
+    state.seen_len = file_len.max(state.offset);
+
     // Bound memory used by the chunk deduplication index:
     // Historical transcript files (>10 minutes inactive) never receive new chunks for old messages.
+    // Active transcripts keep a sliding window of the latest 32 messages without setting
+    // `index_pruned`, so subsequent turns remain strictly incremental.
     let now_ms = chrono::Utc::now().timestamp_millis();
-    if now_ms.saturating_sub(state.modified_ms) > 10 * 60 * 1000 {
-        state.index.clear();
-        state.index.shrink_to_fit();
+    if state.modified_ms > 0 && now_ms.saturating_sub(state.modified_ms) > 10 * 60 * 1000 {
+        if !state.index.is_empty() {
+            state.index.clear();
+            state.index.shrink_to_fit();
+            state.index_pruned = true;
+        }
     } else if state.index.len() > 32 {
         let min_idx = state.calls.len().saturating_sub(32);
         state.index.retain(|_, &mut idx| idx >= min_idx);
@@ -641,29 +648,53 @@ pub(crate) fn read_bounded_ledger_line<R: BufRead>(
     }
 }
 
-pub(crate) fn read_line_with_delim<R: BufRead>(
+/// Streams one LF-delimited line up to `limit` bytes while tracking the last
+/// non-whitespace byte across the full line (even when oversized and drained).
+/// Returns `(total_bytes, terminated, oversized, last_non_ws_byte)`.
+pub(crate) fn read_bounded_ledger_line_with_tail<R: BufRead>(
     reader: &mut R,
     buf: &mut Vec<u8>,
-) -> std::io::Result<(usize, bool)> {
-    let mut total = 0;
+    limit: usize,
+) -> std::io::Result<(usize, bool, bool, Option<u8>)> {
+    let mut total = 0usize;
+    let mut oversized = false;
+    let mut last_non_ws: Option<u8> = None;
+    let update_tail = |slice: &[u8], tail: &mut Option<u8>| {
+        if let Some(&b) = slice.iter().rev().find(|&&b| !b.is_ascii_whitespace()) {
+            *tail = Some(b);
+        }
+    };
     loop {
         let available = match reader.fill_buf() {
-            Ok(buf) => buf,
+            Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
         if available.is_empty() {
-            return Ok((total, false));
+            return Ok((total, false, oversized, last_non_ws));
         }
         match available.iter().position(|&b| b == b'\n') {
             Some(at) => {
-                buf.extend_from_slice(&available[..at]);
+                let slice = &available[..at];
+                update_tail(slice, &mut last_non_ws);
+                if !oversized && buf.len().saturating_add(slice.len()) <= limit {
+                    buf.extend_from_slice(slice);
+                } else {
+                    oversized = true;
+                    buf.clear();
+                }
                 reader.consume(at + 1);
-                return Ok((total + at + 1, true));
+                return Ok((total + at + 1, true, oversized, last_non_ws));
             }
             None => {
-                buf.extend_from_slice(available);
                 let n = available.len();
+                update_tail(available, &mut last_non_ws);
+                if !oversized && buf.len().saturating_add(n) <= limit {
+                    buf.extend_from_slice(available);
+                } else {
+                    oversized = true;
+                    buf.clear();
+                }
                 reader.consume(n);
                 total += n;
             }

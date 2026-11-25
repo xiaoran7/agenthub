@@ -2,7 +2,7 @@ import type {
   ConversationItem,
   RemoteCommandRecord,
   RemoteEvent,
-} from "./remote";
+} from "./remote-types";
 import {
   extractEventTurnId,
   foldEventsInto,

@@ -114,6 +114,9 @@ pub fn find_antigravity_session_detail(
     let raw_id = session_id
         .strip_prefix("antigravity_")
         .unwrap_or(session_id);
+    if !is_safe_antigravity_session_id(raw_id) {
+        return Ok(None);
+    }
     let user_home = home_dir();
     let projects_map = user_home
         .as_deref()

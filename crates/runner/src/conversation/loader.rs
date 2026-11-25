@@ -11,6 +11,59 @@ pub fn load_session_conversation(
     load_session_conversation_with_workspace(home, agent_type, session_id, None)
 }
 
+pub type TranscriptFileFingerprint = (PathBuf, u64, Option<SystemTime>);
+
+/// Returns `true` when every tracked transcript file still exists with the
+/// exact same `(len, mtime)` on disk.
+pub fn transcript_fingerprints_unchanged(fingerprints: &[TranscriptFileFingerprint]) -> bool {
+    !fingerprints.is_empty()
+        && fingerprints.iter().all(|(path, c_len, c_mtime)| {
+            let Some(meta) = fs::metadata(path).ok() else {
+                return false;
+            };
+            meta.len() == *c_len && meta.modified().ok() == *c_mtime
+        })
+}
+
+/// Checks whether a session's on-disk transcript changed relative to caller-held
+/// `known_fingerprints`.
+///
+/// Checking `known_fingerprints` directly via `fs::metadata` avoids relying on
+/// the 10-second `conversation_cache()` TTL, so idle sessions perform zero disk
+/// reads and zero JSON parses indefinitely.
+pub fn load_session_conversation_if_changed(
+    home: &Path,
+    agent_type: AgentType,
+    session_id: &str,
+    workspace: Option<&Path>,
+    known_fingerprints: &[TranscriptFileFingerprint],
+) -> Option<(Vec<TranscriptFileFingerprint>, Vec<Value>)> {
+    if validate_session_id(session_id).is_err() {
+        return None;
+    }
+    if transcript_fingerprints_unchanged(known_fingerprints) {
+        return None;
+    }
+
+    let cache_key = (
+        home.to_path_buf(),
+        agent_type.clone(),
+        session_id.to_string(),
+    );
+    let items = load_session_conversation_with_workspace(home, agent_type, session_id, workspace);
+    let fresh_fingerprints = conversation_cache()
+        .read()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .get(&cache_key)
+                .map(|entry| entry.fingerprints.clone())
+        })
+        .unwrap_or_default();
+
+    Some((fresh_fingerprints, items))
+}
+
 /// Loads a bounded conversation preview for one session with optional workspace path
 /// to allow fast O(1) transcript lookup without recursive directory scans.
 pub fn load_session_conversation_with_workspace(
@@ -61,7 +114,7 @@ pub fn load_session_conversation_with_workspace(
                 && cached_root == &codex_root
             {
                 for (name, p) in list {
-                    if name.contains(raw_session_id) && p.is_file() {
+                    if codex_rollout_matches_session_id(name, raw_session_id) && p.is_file() {
                         paths.push(p.clone());
                     }
                 }
@@ -88,7 +141,7 @@ pub fn load_session_conversation_with_workspace(
                                 .file_name()
                                 .and_then(|v| v.to_str())
                                 .unwrap_or_default();
-                            if name.contains(raw_session_id) {
+                            if codex_rollout_matches_session_id(name, raw_session_id) {
                                 paths.push(path);
                             }
                         }

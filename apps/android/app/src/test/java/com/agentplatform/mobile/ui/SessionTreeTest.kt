@@ -8,6 +8,8 @@ import com.agentplatform.mobile.data.RemoteBinding
 import com.agentplatform.mobile.data.RemoteSessionRow
 import com.agentplatform.mobile.data.Snapshot
 import com.agentplatform.mobile.data.DiscoveryCandidate
+import java.time.LocalDate
+import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -449,5 +451,50 @@ class SessionTreeTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `offline active sessions stay visible until the online filter is enabled`() {
+        val now = LocalDate.of(2026, 11, 24)
+        val zone = ZoneId.of("Asia/Shanghai")
+        val recent = "0198a8fd-5db7-7d00-a001-000000000001"
+        val previous = "0198a8fd-5db7-7d00-a001-000000000002"
+        val recentWorkspace = "/code/agenthub"
+        val previousWorkspace = "/code/history"
+        val snapshot = Snapshot(
+            cursor = 1,
+            hosts = listOf(
+                host("primary", "工作电脑", candidates = listOf(
+                    candidate(
+                        recent, "codex", recentWorkspace, "当前任务",
+                        now.atStartOfDay(zone).plusHours(1).toInstant().toEpochMilli(),
+                    ),
+                )),
+                host("secondary", "离线电脑", online = false, candidates = listOf(
+                    candidate(
+                        previous, "codex", previousWorkspace, "已有任务",
+                        now.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+                    ),
+                )),
+            ),
+            sessions = listOf(
+                session("primary", "current", recent, recentWorkspace),
+                session("secondary", "previous", previous, previousWorkspace, online = false),
+            ),
+        )
+        val tree = buildSessionTree(snapshot)
+        val dates = buildSessionFeed(tree, null, "", false, SessionFeedGrouping.DATE, now, zone)
+        assertEquals(listOf("今天", "昨天"), dates.map { it.label })
+        assertTrue(dates.last().entries.single().entry is TreeEntry.Active)
+        assertFalse(dates.last().entries.single().online)
+
+        val onlineDates = buildSessionFeed(tree, null, "", true, SessionFeedGrouping.DATE, now, zone)
+        assertEquals(listOf("今天"), onlineDates.map { it.label })
+
+        val workspaces = buildSessionFeed(tree, "secondary", "已有", false, SessionFeedGrouping.WORKSPACE, now, zone)
+        assertEquals(listOf("history"), workspaces.map { it.label })
+
+        val statuses = buildSessionFeed(tree, null, "", false, SessionFeedGrouping.STATUS, now, zone)
+        assertEquals(listOf("空闲", "电脑离线"), statuses.map { it.label })
     }
 }

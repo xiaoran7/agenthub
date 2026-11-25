@@ -72,12 +72,21 @@ impl ClaudeProcessSession {
             "--include-partial-messages".to_string(),
         ];
 
-        if let Some(id) = resume_session_id
-            && super::validate_safe_session_id(id)
-        {
-            base_args.push("--resume".to_string());
-            base_args.push(id.trim().to_string());
-        }
+        let validated_resume_id = match resume_session_id.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(id) => {
+                if !super::validate_safe_session_id(id) {
+                    return Err(CollectorError::Protocol {
+                        program,
+                        code: "invalid_session_id".to_owned(),
+                        message: "resume session id contains disallowed characters".to_owned(),
+                    });
+                }
+                base_args.push("--resume".to_string());
+                base_args.push(id.to_string());
+                Some(id)
+            }
+            None => None,
+        };
 
         command.args(&base_args);
 
@@ -93,7 +102,7 @@ impl ClaudeProcessSession {
             gateway.inject_into_command_with_session(
                 &mut command,
                 &mut effective_model,
-                resume_session_id,
+                validated_resume_id,
             );
         }
 
@@ -125,33 +134,27 @@ impl ClaudeProcessSession {
             source,
         })?;
 
-        let job = ChildJob::attach(&child).map_err(|source| {
+        let mut job = Some(ChildJob::attach(&child).map_err(|source| {
             let _ = child.kill();
             let _ = child.wait();
             CollectorError::Io {
                 program: program.clone(),
                 source,
             }
-        })?;
+        })?);
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| CollectorError::MissingStdio {
-                program: program.clone(),
-            })?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| CollectorError::MissingStdio {
-                program: program.clone(),
-            })?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| CollectorError::MissingStdio {
-                program: program.clone(),
-            })?;
+        let (stdin, stdout, stderr) =
+            match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+                (Some(stdin), Some(stdout), Some(stderr)) => (stdin, stdout, stderr),
+                _ => {
+                    drop(job.take());
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CollectorError::MissingStdio {
+                        program: program.clone(),
+                    });
+                }
+            };
 
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let stderr_clone = stderr_buf.clone();
@@ -163,11 +166,15 @@ impl ClaudeProcessSession {
                     break;
                 }
                 let piece = String::from_utf8_lossy(&chunk[..n]);
-                if let Ok(mut guard) = stderr_clone.lock() {
-                    if guard.len() < MAX_STDERR_CAPTURE_BYTES {
-                        let remaining = MAX_STDERR_CAPTURE_BYTES - guard.len();
-                        let clipped: String = piece.chars().take(remaining).collect();
-                        guard.push_str(&clipped);
+                if let Ok(mut guard) = stderr_clone.lock()
+                    && guard.len() < MAX_STDERR_CAPTURE_BYTES
+                {
+                    let remaining = MAX_STDERR_CAPTURE_BYTES - guard.len();
+                    if piece.len() <= remaining {
+                        guard.push_str(&piece);
+                    } else {
+                        let end = piece.floor_char_boundary(remaining);
+                        guard.push_str(&piece[..end]);
                     }
                 }
             }
@@ -216,8 +223,8 @@ impl ClaudeProcessSession {
             _reader: Some(reader),
             _stderr_reader: Some(stderr_reader),
             stderr_buf,
-            job: Some(job),
-            session_id: resume_session_id.unwrap_or_default().to_string(),
+            job,
+            session_id: validated_resume_id.unwrap_or_default().to_string(),
             cwd: cwd_path,
             model: effective_model,
             requested_model: options.model.map(str::to_string),
@@ -491,8 +498,9 @@ impl ClaudeProcessSession {
 
     /// Gracefully interrupts or kills the process and its attached child job tree.
     pub fn interrupt(&mut self) -> Result<(), CollectorError> {
+        drop(self.job.take());
         let _ = self.child.kill();
-        let _ = self.job.take();
+        let _ = self.child.wait();
         self.is_turn_in_progress = false;
         Ok(())
     }
@@ -500,8 +508,8 @@ impl ClaudeProcessSession {
 
 impl Drop for ClaudeProcessSession {
     fn drop(&mut self) {
+        drop(self.job.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = self.job.take();
     }
 }

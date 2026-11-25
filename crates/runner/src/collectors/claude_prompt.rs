@@ -160,6 +160,7 @@ impl<'de> Visitor<'de> for PromptContentVisitor {
 }
 
 pub(crate) struct ClaudeContextMessage<'a> {
+    pub(crate) id: Option<Cow<'a, str>>,
     pub(crate) model: Option<Cow<'a, str>>,
     pub(crate) effort: Option<Cow<'a, str>>,
     pub(crate) stop_reason: Option<Cow<'a, str>>,
@@ -201,6 +202,7 @@ impl<'de> Visitor<'de> for ClaudeContextMessageVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
         let mut msg = ClaudeContextMessage {
+            id: None,
             model: None,
             effort: None,
             stop_reason: None,
@@ -209,6 +211,7 @@ impl<'de> Visitor<'de> for ClaudeContextMessageVisitor {
         };
         while let Some(key) = map.next_key::<Cow<'de, str>>()? {
             match key.as_ref() {
+                "id" => msg.id = map.next_value::<JsonOptStr<'de>>()?.0,
                 "model" => msg.model = map.next_value()?,
                 "effort" => msg.effort = map.next_value()?,
                 "stop_reason" => msg.stop_reason = map.next_value()?,

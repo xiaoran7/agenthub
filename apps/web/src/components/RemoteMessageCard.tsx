@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { copyTextToClipboard } from "../lib/clipboard";
 import {
   isRedactedPathOnly,
   readableRemoteText,
@@ -129,7 +130,14 @@ export const RemoteMessageCard = memo(function RemoteMessageCard({
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
-  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   if (isRedactedPathOnly(item.text)) {
     return null;
@@ -152,10 +160,13 @@ export const RemoteMessageCard = memo(function RemoteMessageCard({
 
   const copyMessage = () => {
     if (!cleanText) return;
-    void navigator.clipboard?.writeText(cleanText).then(() => {
+    void copyTextToClipboard(cleanText).then((ok) => {
+      if (!ok || !mountedRef.current) return;
       setCopied(true);
       clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 1800);
+      copyTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setCopied(false);
+      }, 1800);
     });
   };
 

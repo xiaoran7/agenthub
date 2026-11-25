@@ -1,6 +1,30 @@
 use super::session_control::{configure_codex_unload, is_codex_thread_id};
 use super::*;
 
+const MAX_PROMPT_ATTACHMENTS: usize = 16;
+const MAX_TOTAL_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+
+fn write_private_attachment(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
+}
+
 impl<T: NativeTransport> NativeSessionHost<T> {
     pub(crate) fn execute(&mut self, command: &RemoteCommand) -> Result<Value, NativeError> {
         let hub_id = &command.hub_session_id;
@@ -300,6 +324,16 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 if (text.trim().is_empty() && attachments.is_empty()) || text.len() > 512 * 1024 {
                     return Err(NativeError::rejected("invalid_prompt"));
                 }
+                if attachments.len() > MAX_PROMPT_ATTACHMENTS {
+                    return Err(NativeError::rejected("too_many_attachments"));
+                }
+                let total_attachment_bytes: usize = attachments
+                    .iter()
+                    .try_fold(0usize, |acc, att| acc.checked_add(att.data.len()))
+                    .unwrap_or(usize::MAX);
+                if total_attachment_bytes > MAX_TOTAL_ATTACHMENT_BYTES {
+                    return Err(NativeError::rejected("attachments_too_large"));
+                }
                 if text.trim_start().starts_with('/') {
                     return Err(NativeError::rejected("slash_not_supported"));
                 }
@@ -402,8 +436,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         let file_path = attach_dir.join(&file_name);
                         let is_base64 = att.encoding.as_deref() == Some("base64");
                         if is_base64 {
-                            let saved_ok = decode_base64_bytes(&att.data)
-                                .is_some_and(|bytes| std::fs::write(&file_path, &bytes).is_ok());
+                            let saved_ok = decode_base64_bytes(&att.data).is_some_and(|bytes| {
+                                write_private_attachment(&file_path, &bytes).is_ok()
+                            });
                             if att.media_type.starts_with("image/") {
                                 image_blocks.push(json!({
                                     "type": "image",
@@ -432,7 +467,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     .push(format!("[附件 {}: {}]", att.name, att.media_type));
                             }
                         } else {
-                            let saved_ok = std::fs::write(&file_path, att.data.as_bytes()).is_ok();
+                            let saved_ok =
+                                write_private_attachment(&file_path, att.data.as_bytes()).is_ok();
                             if att.data.len() <= 64 * 1024 {
                                 attachment_notes.push(format!(
                                     "[附件 {} ({})]:\n```\n{}\n```",

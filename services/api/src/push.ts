@@ -65,7 +65,15 @@ export function encryptPushPayload(
     ephemeral.generateKeys();
   }
   const senderKey = ephemeral.getPublicKey();
-  const sharedSecret = ephemeral.computeSecret(receiverKey);
+  let sharedSecret: Buffer;
+  try {
+    sharedSecret = ephemeral.computeSecret(receiverKey);
+  } catch {
+    throw new PushError(
+      "invalid_subscription",
+      "p256dh is not a valid P-256 point",
+    );
+  }
   const salt = overrides.salt ?? randomBytes(16);
 
   // RFC 8291 section 3.4: the auth secret is the extract salt, and the info
@@ -166,10 +174,13 @@ export class WebPushSender implements PushSender {
     let body: Buffer;
     try {
       body = encryptPushPayload(payload, subscription);
-    } catch {
-      // A subscription we cannot encrypt for is unusable; drop it like a
-      // subscription the push service has already forgotten.
-      return "gone";
+    } catch (error) {
+      if (error instanceof PushError && error.code === "invalid_subscription") {
+        // A subscription we cannot encrypt for is unusable; drop it like a
+        // subscription the push service has already forgotten.
+        return "gone";
+      }
+      return "failed";
     }
     let response: Response;
     try {
@@ -194,10 +205,12 @@ export class WebPushSender implements PushSender {
     } catch {
       return "failed";
     }
-    if (response.status === 404 || response.status === 410) {
+    const { status, ok } = response;
+    await response.body?.cancel().catch(() => {});
+    if (status === 404 || status === 410) {
       return "gone";
     }
-    return response.ok ? "delivered" : "failed";
+    return ok ? "delivered" : "failed";
   }
 }
 

@@ -1,0 +1,123 @@
+@import "../components/cds-tokens.css";
+:root {
+  /* Claude Typography Stacks */
+  --font-serif:
+    "Iowan Old Style", "Apple Garamond", "Baskerville", "Georgia", "Songti SC",
+    "Noto Serif SC", "STSong", serif;
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono:
+    "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Monaco, Consolas,
+    monospace;
+  --mono: var(--font-mono);
+
+  /* Geometry & Rhythm */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+  --radius: 12px;
+
+  /* Qoder Forest/Mint Accent Bridge */
+  --remote-terracotta: var(--cds-clay, #267861);
+  --remote-terracotta-hover: var(--cds-clay-hover, #1d5e4c);
+  --remote-terracotta-soft: var(--cds-clay-soft, rgba(38, 120, 97, 0.11));
+}
+/* Light Theme: Qoder Mint-Porcelain Light */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --remote-bg: #f7faf8;
+  --remote-sidebar: #eff5f2;
+  --remote-surface: rgba(255, 255, 255, 0.96);
+  --remote-raised: #ffffff;
+  --remote-hover: rgba(22, 34, 28, 0.045);
+  --remote-selected: rgba(38, 120, 97, 0.1);
+  --remote-line: #dce7e2;
+  --remote-line-strong: #bbd1c7;
+  --remote-ink: #16221c;
+  --remote-secondary: #46574e;
+  --remote-muted: #5c6e64;
+
+  --remote-blue: #267861;
+  --remote-green: #1f7a5a;
+  --remote-amber: #ba7b37;
+  --remote-red: #c9424b;
+
+  /* Legacy Bridge Tokens */
+  --background: var(--remote-bg);
+  --sidebar: var(--remote-sidebar);
+  --surface: var(--remote-surface);
+  --surface-hover: var(--remote-hover);
+  --surface-raised: var(--remote-raised);
+  --border: var(--remote-line);
+  --border-strong: var(--remote-line-strong);
+  --primary: var(--remote-terracotta);
+  --primary-soft: var(--remote-terracotta-soft);
+  --success: var(--remote-green);
+  --warning: var(--remote-amber);
+  --danger: var(--remote-red);
+  --text-primary: var(--remote-ink);
+  --text-secondary: var(--remote-secondary);
+  --text-muted: var(--remote-muted);
+
+  --remote-composer-bg: #ffffff;
+  --remote-composer-border: #dce7e2;
+  --remote-composer-shadow:
+    0 6px 22px -4px rgba(22, 34, 28, 0.07),
+    0 2px 6px -1px rgba(22, 34, 28, 0.03);
+  --remote-user-msg-bg: #e6f4ee;
+  --remote-user-msg-border: #cbe4da;
+  --remote-code-bg: #eff5f2;
+  --remote-tool-bg: #ffffff;
+  --remote-modal-shadow: 0 20px 60px rgba(22, 34, 28, 0.14);
+}
+/* Dark Theme: Qoder Obsidian-Forest Dark */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --remote-bg: #0f1110;
+  --remote-sidebar: #0c0e0d;
+  --remote-surface: #171a18;
+  --remote-raised: #1f2421;
+  --remote-hover: rgba(255, 255, 255, 0.055);
+  --remote-selected: rgba(115, 205, 148, 0.16);
+  --remote-line: #272e2a;
+  --remote-line-strong: #36423b;
+  --remote-ink: #f4f5f3;
+  --remote-secondary: #b4bcb7;
+  --remote-muted: #858e88;
+
+  --remote-blue: #73cd94;
+  --remote-green: #8ee5a1;
+  --remote-amber: #f6c85f;
+  --remote-red: #ff6b70;
+
+  /* Legacy Bridge Tokens */
+  --background: var(--remote-bg);
+  --sidebar: var(--remote-sidebar);
+  --surface: var(--remote-surface);
+  --surface-hover: var(--remote-hover);
+  --surface-raised: var(--remote-raised);
+  --border: var(--remote-line);
+  --border-strong: var(--remote-line-strong);
+  --primary: var(--remote-terracotta);
+  --primary-soft: var(--remote-terracotta-soft);
+  --success: var(--remote-green);
+  --warning: var(--remote-amber);
+  --danger: var(--remote-red);
+  --text-primary: var(--remote-ink);
+  --text-secondary: var(--remote-secondary);
+  --text-muted: var(--remote-muted);
+
+  --remote-composer-bg: #1f2421;
+  --remote-composer-border: #2c3530;
+  --remote-composer-shadow: 0 10px 32px rgba(0, 0, 0, 0.48);
+  --remote-user-msg-bg: #1a2b22;
+  --remote-user-msg-border: #2c4637;
+  --remote-code-bg: #141816;
+  --remote-tool-bg: #171a18;
+  --remote-modal-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+}

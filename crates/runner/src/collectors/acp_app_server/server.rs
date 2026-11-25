@@ -58,26 +58,25 @@ impl AcpAppServer {
             program: program.clone(),
             source,
         })?;
-        let job = ChildJob::attach(&child).map_err(|source| {
+        let mut job = Some(ChildJob::attach(&child).map_err(|source| {
             let _ = child.kill();
             let _ = child.wait();
             CollectorError::Io {
                 program: program.clone(),
                 source,
             }
-        })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| CollectorError::MissingStdio {
-                program: program.clone(),
-            })?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| CollectorError::MissingStdio {
-                program: program.clone(),
-            })?;
+        })?);
+        let (stdin, stdout) = match (child.stdin.take(), child.stdout.take()) {
+            (Some(stdin), Some(stdout)) => (stdin, stdout),
+            _ => {
+                drop(job.take());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(CollectorError::MissingStdio {
+                    program: program.clone(),
+                });
+            }
+        };
         let (sender, receiver) = mpsc::channel();
         let reader = thread::spawn(move || read_acp_protocol(stdout, sender));
         let mut server = Self {
@@ -89,10 +88,12 @@ impl AcpAppServer {
             pending_messages: VecDeque::new(),
             next_request_id: 1,
             response_timeout,
-            job: Some(job),
+            job,
             pending_prompts: HashMap::new(),
             pending_permissions: HashMap::new(),
             active_turns: HashMap::new(),
+            eof_reached: false,
+            deferred_read_error: None,
         };
         server.initialize()?;
         Ok(server)
@@ -193,15 +194,6 @@ impl AcpAppServer {
     ) -> Result<u64, CollectorError> {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
-        self.pending_prompts.insert(
-            request_id,
-            PendingPromptInfo {
-                turn_id: turn_id.to_string(),
-                session_id: session_id.to_string(),
-            },
-        );
-        self.active_turns
-            .insert(session_id.to_string(), turn_id.to_string());
         let mut params = json!({
             "sessionId": session_id,
             "prompt": [
@@ -223,6 +215,15 @@ impl AcpAppServer {
             "id": request_id,
             "params": params
         }))?;
+        self.pending_prompts.insert(
+            request_id,
+            PendingPromptInfo {
+                turn_id: turn_id.to_string(),
+                session_id: session_id.to_string(),
+            },
+        );
+        self.active_turns
+            .insert(session_id.to_string(), turn_id.to_string());
         Ok(request_id)
     }
 
@@ -276,20 +277,26 @@ impl AcpAppServer {
     }
 
     pub fn respond_permission(&mut self, id: Value, decision: &str) -> Result<(), CollectorError> {
-        let raw_id = id
+        let lookup_key = id
             .as_str()
             .map(|s| s.strip_prefix("acp_req_").unwrap_or(s).to_string())
             .or_else(|| id.as_i64().map(|n| n.to_string()))
             .or_else(|| id.as_u64().map(|n| n.to_string()))
             .unwrap_or_else(|| id.to_string());
 
-        let target_id = if let Ok(num) = raw_id.parse::<i64>() {
-            json!(num)
-        } else {
-            json!(raw_id)
+        let pending = self.pending_permissions.remove(&lookup_key);
+        let (target_id, options) = match pending {
+            Some(req) => (req.raw_id, Some(req.options)),
+            None => {
+                let fallback_id = match &id {
+                    Value::String(s) => {
+                        Value::String(s.strip_prefix("acp_req_").unwrap_or(s).to_string())
+                    }
+                    other => other.clone(),
+                };
+                (fallback_id, None)
+            }
         };
-
-        let options = self.pending_permissions.remove(&raw_id);
         let outcome = build_permission_outcome(options.as_ref(), decision);
 
         self.send_json(&json!({
@@ -337,34 +344,71 @@ impl AcpAppServer {
     }
 
     pub fn drain_messages(&mut self) -> Result<Vec<Value>, CollectorError> {
+        if self.pending_messages.is_empty()
+            && let Some(err) = self.deferred_read_error.take()
+        {
+            return Err(err);
+        }
+        if self.eof_reached && self.pending_messages.is_empty() {
+            return Err(CollectorError::UnexpectedEof {
+                program: self.program.clone(),
+                request_id: self.next_request_id,
+            });
+        }
         let mut incoming = Vec::new();
         while let Some(msg) = self.pending_messages.pop_front() {
             incoming.push(msg);
         }
+        let mut terminal_err: Option<CollectorError> = None;
         loop {
             match self.receiver.try_recv() {
                 Ok(ProtocolRead::Message(msg)) => incoming.push(msg),
                 Ok(ProtocolRead::LineTooLarge) => {
-                    return Err(CollectorError::ProtocolLineTooLarge {
+                    terminal_err = Some(CollectorError::ProtocolLineTooLarge {
                         program: self.program.clone(),
                         limit: crate::collectors::MAX_PROTOCOL_LINE_BYTES,
                     });
+                    break;
                 }
                 Ok(ProtocolRead::InvalidJson(source)) => {
-                    return Err(CollectorError::InvalidJson {
+                    terminal_err = Some(CollectorError::InvalidJson {
                         program: self.program.clone(),
                         source,
                     });
+                    break;
                 }
                 Ok(ProtocolRead::Io(source)) => {
-                    return Err(CollectorError::Io {
+                    terminal_err = Some(CollectorError::Io {
                         program: self.program.clone(),
                         source,
                     });
+                    break;
                 }
-                Ok(ProtocolRead::Eof) | Err(TryRecvError::Disconnected) => break,
+                Ok(ProtocolRead::Eof) => {
+                    self.eof_reached = true;
+                    terminal_err = Some(CollectorError::UnexpectedEof {
+                        program: self.program.clone(),
+                        request_id: self.next_request_id,
+                    });
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.eof_reached = true;
+                    terminal_err = Some(CollectorError::ReaderStopped {
+                        program: self.program.clone(),
+                    });
+                    break;
+                }
                 Err(TryRecvError::Empty) => break,
             }
+        }
+
+        if let Some(err) = terminal_err {
+            if incoming.is_empty() {
+                return Err(err);
+            }
+            // Preserve already-dequeued messages and surface the error on next drain.
+            self.deferred_read_error = Some(err);
         }
 
         let mut normalized = Vec::new();
@@ -424,11 +468,11 @@ impl AcpAppServer {
 
 impl Drop for AcpAppServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
         if let Some(job) = self.job.take() {
             drop(job);
         }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
@@ -479,18 +523,16 @@ pub enum AcpGatewayKind {
     ClaudeCode,
 }
 
-pub fn detect_acp_gateway_kind(program_path: &Path, args: &[String]) -> Option<AcpGatewayKind> {
+pub fn detect_acp_gateway_kind(program_path: &Path, _args: &[String]) -> Option<AcpGatewayKind> {
     let name = program_path
         .file_name()
         .map(|s| s.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    let joined_args = args.join(" ").to_ascii_lowercase();
-    let haystack = format!("{name} {joined_args}");
-    if haystack.contains("codex") {
+    if name.contains("codex") {
         Some(AcpGatewayKind::Codex)
-    } else if haystack.contains("gemini") || haystack.contains("antigravity") {
+    } else if name.contains("gemini") || name.contains("antigravity") {
         Some(AcpGatewayKind::Antigravity)
-    } else if haystack.contains("claude") {
+    } else if name.contains("claude") {
         Some(AcpGatewayKind::ClaudeCode)
     } else {
         None

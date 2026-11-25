@@ -260,10 +260,6 @@ export function pluginsUrl(base: string, runnerId?: string): string {
   return `${base}/v3/remote/plugins${qs}`;
 }
 
-export function pluginToggleUrl(base: string, id: string): string {
-  return `${base}/v3/remote/plugins/${encodeURIComponent(id)}/toggle`;
-}
-
 export function runnerPluginActionUrl(base: string, runnerId: string): string {
   return `${base}/v3/remote/runners/${encodeURIComponent(runnerId)}/plugins/action`;
 }
@@ -281,14 +277,6 @@ export async function fetchRemotePlugins(
     plugins: Array.isArray(body.plugins) ? body.plugins : [],
     runners: Array.isArray(body.runners) ? body.runners : [],
   };
-}
-
-export async function fetchPlugins(
-  config: PanelConfig,
-  identity: GatewayIdentity,
-): Promise<AgentPlugin[]> {
-  const res = await fetchRemotePlugins(config, identity);
-  return res.plugins;
 }
 
 export async function sendPluginAction(
@@ -330,31 +318,4 @@ export async function sendPluginAction(
     plugins: AgentPlugin[];
     error?: string;
   };
-}
-
-export async function togglePlugin(
-  config: PanelConfig,
-  identity: GatewayIdentity,
-  id: string,
-  enabled?: boolean,
-): Promise<AgentPlugin> {
-  let response: Response;
-  try {
-    response = await fetch(pluginToggleUrl(config.gatewayBase, id), {
-      method: "POST",
-      headers: {
-        "x-user-id": identity.userId,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(enabled !== undefined ? { enabled } : {}),
-      cache: "no-store",
-    });
-  } catch {
-    throw new ApiError(0, "network_error");
-  }
-  if (!response.ok) {
-    throw new ApiError(response.status, await errorCode(response));
-  }
-  const body = (await response.json()) as { plugin: AgentPlugin };
-  return body.plugin;
 }

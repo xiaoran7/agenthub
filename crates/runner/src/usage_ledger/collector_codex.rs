@@ -1,6 +1,7 @@
 use super::*;
 
 const CODEX_ROLLOUT_LIMIT: usize = 4_000;
+const CODEX_ROLLOUT_MAX_DEPTH: usize = 8;
 
 /// Discovers every Codex home folder on this machine (port of Magpie's
 /// `appdir.CodexHomesIn`): `$CODEX_HOME`, `~/.codex`, and any `~/.codex*`
@@ -60,7 +61,7 @@ pub(crate) fn update_codex_calls(home: &Path, routed: &HashMap<String, String>) 
     let mut seen_paths = HashSet::new();
     for root in codex_homes(home) {
         for directory in ["sessions", "archived_sessions"] {
-            collect_rollouts(&root.join(directory), &mut files, &mut seen_paths);
+            collect_rollouts(&root.join(directory), 0, &mut files, &mut seen_paths);
         }
     }
     files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
@@ -94,7 +95,7 @@ pub(crate) fn update_codex_calls(home: &Path, routed: &HashMap<String, String>) 
     let mark_set: HashSet<&Path> = file_marks.iter().map(|(p, _)| p.as_path()).collect();
     let mut any_changed = guard.codex.len() != file_marks.len();
     guard.codex.retain(|p, _| mark_set.contains(p.as_path()));
-    guard.remove_missing_cold_paths("codex", &mark_set);
+    any_changed |= guard.remove_missing_cold_paths("codex", &mark_set);
 
     for (path, mark) in file_marks {
         if let Some((old_mark, _)) = guard.codex.get(&path) {
@@ -135,14 +136,28 @@ pub(crate) fn codex_calls(
     (out, changed)
 }
 
-fn collect_rollouts(directory: &Path, files: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
+fn collect_rollouts(
+    directory: &Path,
+    depth: usize,
+    files: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+) {
+    if depth > CODEX_ROLLOUT_MAX_DEPTH {
+        return;
+    }
     let Ok(entries) = fs::read_dir(directory) else {
         return;
     };
     for entry in entries.flatten() {
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            collect_rollouts(&path, files, seen);
+        if ft.is_dir() {
+            collect_rollouts(&path, depth + 1, files, seen);
             continue;
         }
         let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");

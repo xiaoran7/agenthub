@@ -83,4 +83,11 @@ export const MIGRATIONS = [
       import.meta.url,
     ),
   },
+  {
+    version: 19,
+    url: new URL(
+      "../migrations/0019_push_subscriber_user.sql",
+      import.meta.url,
+    ),
+  },
 ];

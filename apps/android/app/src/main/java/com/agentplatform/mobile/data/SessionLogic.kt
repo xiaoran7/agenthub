@@ -160,7 +160,7 @@ class EventWindow(private val capacity: Int = 1_200) {
      */
     private fun pinned(event: RemoteEvent, isNewestSnapshot: Boolean): Boolean {
         if (isNewestSnapshot) return true
-        if (event.payload.optString("type") != "event") return false
+        if (event.payload.optStringOrEmpty("type") != "event") return false
         return event.eventKind in APPROVAL_KINDS
     }
 
@@ -230,37 +230,115 @@ class CommandLedger(private val maxEntries: Int = MAX_ENTRIES) {
         return hex.toString()
     }
 
+    fun computeHash(scope: String, action: String, payload: String): String =
+        key(scope, action, payload)
+
+    /** Key for this exact action in this session, minting one on first use. */
+    @Synchronized
+    fun keyForHash(hash: String): String =
+        keys.getOrPut(hash) { UUID.randomUUID().toString() }
+
     /** Key for this exact action in this session, minting one on first use. */
     @Synchronized
     fun keyFor(scope: String, action: String, payload: String): String =
-        keys.getOrPut(key(scope, action, payload)) { UUID.randomUUID().toString() }
+        keyForHash(key(scope, action, payload))
+
+    /** The Gateway accepted (or rejected) it, so the key has served its purpose. */
+    @Synchronized
+    fun forgetHash(hash: String) {
+        keys.remove(hash)
+    }
 
     /** The Gateway accepted (or rejected) it, so the key has served its purpose. */
     @Synchronized
     fun forget(scope: String, action: String, payload: String) {
-        keys.remove(key(scope, action, payload))
+        forgetHash(key(scope, action, payload))
     }
 
     /**
      * A permanent refusal: retrying the same key would replay the refusal.
      *
      * Only the codes the Gateway uses for a decision about *this command* count
-     * as permanent. The Gateway answers 400 for every retryable state too —
-     * `runner_offline`, `session_control_lost`, `host_generation_mismatch`,
-     * `approval_not_pending`, `runner_backpressure` — and 429/408 come from
-     * layers in front of it, so a blanket 4xx rule would mint a fresh key on a
-     * retry and let the same action run twice.
+     * as permanent. The Gateway answers 400 for some retryable states too
+     * (`runner_offline`, `session_control_lost`, `host_generation_mismatch`,
+     * `runner_backpressure`), while 408/429/5xx are transient, so a blanket 4xx
+     * rule would mint a fresh key on a retry and let the same action run twice.
      */
-    fun forgetIfPermanent(scope: String, action: String, payload: String, status: Int) {
-        if (status == 401 || status == 403 || status == 404) forget(scope, action, payload)
+    fun forgetHashIfPermanent(hash: String, status: Int, code: String = "") {
+        if (isPermanentCommandFailure(status, code)) {
+            forgetHash(hash)
+        }
+    }
+
+    fun forgetIfPermanent(
+        scope: String,
+        action: String,
+        payload: String,
+        status: Int,
+        code: String = "",
+    ) {
+        if (isPermanentCommandFailure(status, code)) {
+            forget(scope, action, payload)
+        }
     }
 
     val size: Int
         @Synchronized get() = keys.size
 
-    private companion object {
-        const val MAX_ENTRIES = 512
-        const val HEX_CHARS = "0123456789abcdef"
+    companion object {
+        private const val MAX_ENTRIES = 512
+        private const val HEX_CHARS = "0123456789abcdef"
+
+        internal val PERMANENT_400_CODES =
+            setOf(
+                "invalid_field",
+                "invalid_request",
+                "invalid_command_identity",
+                "invalid_prompt",
+                "invalid_model",
+                "invalid_permission_mode",
+                "invalid_effort",
+                "command_id_conflict",
+                "body_too_large",
+                "payload_too_large",
+                "host_generation_required",
+                "workspace_required",
+                "workspace_unknown",
+                "workspace_revoked",
+                "workspace_not_ready",
+                "workspace_not_authorized",
+                "workspace_unavailable",
+                "workspace_limit_exceeded",
+                "create_cannot_set_native_id",
+                "native_id_required",
+                "native_id_mismatch",
+                "native_session_already_bound",
+                "resume_workspace_mismatch",
+                "attach_not_supported",
+                "external_session_not_resumable",
+                "slash_not_supported",
+                "approval_session_mismatch",
+                "approval_type_not_supported",
+                "approval_decision_not_available",
+                "question_session_mismatch",
+                "session_already_bound",
+                "session_not_bound",
+                "session_not_started",
+                "plugin_disabled",
+                "plugin_not_found",
+                "runner_upgrade_required",
+                "deepseek_harness_runtime_not_implemented",
+            )
+
+        internal fun isPermanentCommandFailure(status: Int, code: String = ""): Boolean {
+            if (status == 401 || status == 403 || status == 404 || status == 409 || status == 413) {
+                return true
+            }
+            if (code == "command_id_conflict" || code == "body_too_large" || code == "payload_too_large") {
+                return true
+            }
+            return status == 400 && code in PERMANENT_400_CODES
+        }
     }
 }
 

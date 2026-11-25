@@ -10,13 +10,37 @@ impl MultiProviderTransport {
             "thread/read" => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("claude_");
-                let (cwd, title) = if let Some(cached) = self
+                let cached = self
                     .claude_cached_cwds
                     .get(session_id)
                     .or_else(|| self.claude_cached_cwds.get(raw_id))
-                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                    .cloned();
+                let in_memory = self.claude_sessions.contains_key(session_id)
+                    || self.claude_active_turns.contains_key(session_id)
+                    || cached.is_some();
+                let disk_info = if !in_memory {
+                    crate::collectors::find_claude_session_info(raw_id)
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                if raw_id.is_empty() || (!in_memory && disk_info.is_none()) {
+                    return Err(NativeError::rejected("native_session_not_found"));
+                }
+                let (cwd, title) = if let Some(c) =
+                    cached.filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                 {
-                    (cached.clone(), None)
+                    (c, None)
+                } else if let Some((c, t)) = disk_info
+                    .or_else(|| {
+                        crate::collectors::find_claude_session_info(raw_id)
+                            .ok()
+                            .flatten()
+                    })
+                    .filter(|(c, _)| !c.as_os_str().is_empty() && *c != Path::new("."))
+                {
+                    (c, t)
                 } else if let Some(param_cwd) = params["cwd"]
                     .as_str()
                     .filter(|s| !s.is_empty() && *s != ".")
@@ -24,11 +48,6 @@ impl MultiProviderTransport {
                     let p = PathBuf::from(param_cwd);
                     let canon = dunce::canonicalize(&p).unwrap_or(p);
                     (canon, None)
-                } else if let Ok(Some((c, t))) = crate::collectors::find_claude_session_info(raw_id)
-                    && !c.as_os_str().is_empty()
-                    && c != Path::new(".")
-                {
-                    (c, t)
                 } else {
                     (PathBuf::from("."), None)
                 };
@@ -48,6 +67,24 @@ impl MultiProviderTransport {
             "thread/resume" => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("claude_");
+                let cached = self
+                    .claude_cached_cwds
+                    .get(session_id)
+                    .or_else(|| self.claude_cached_cwds.get(raw_id))
+                    .cloned();
+                let in_memory = self.claude_sessions.contains_key(session_id)
+                    || self.claude_active_turns.contains_key(session_id)
+                    || cached.is_some();
+                let disk_info = if !in_memory {
+                    crate::collectors::find_claude_session_info(raw_id)
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                if raw_id.is_empty() || (!in_memory && disk_info.is_none()) {
+                    return Err(NativeError::rejected("native_session_not_found"));
+                }
                 if let Some(m) = params["model"]
                     .as_str()
                     .map(str::trim)
@@ -56,12 +93,18 @@ impl MultiProviderTransport {
                     self.claude_cached_models
                         .insert(session_id.to_string(), m.to_string());
                 }
-                let cwd = self
-                    .claude_cached_cwds
-                    .get(session_id)
-                    .or_else(|| self.claude_cached_cwds.get(raw_id))
+                let cwd = cached
                     .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
-                    .cloned()
+                    .or_else(|| {
+                        disk_info
+                            .or_else(|| {
+                                crate::collectors::find_claude_session_info(raw_id)
+                                    .ok()
+                                    .flatten()
+                            })
+                            .map(|(c, _)| c)
+                            .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                    })
                     .or_else(|| {
                         params["cwd"]
                             .as_str()
@@ -70,13 +113,6 @@ impl MultiProviderTransport {
                                 let p = PathBuf::from(s);
                                 dunce::canonicalize(&p).unwrap_or(p)
                             })
-                    })
-                    .or_else(|| {
-                        crate::collectors::find_claude_session_info(raw_id)
-                            .ok()
-                            .flatten()
-                            .map(|(c, _)| c)
-                            .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                     })
                     .unwrap_or_else(|| PathBuf::from("."));
                 self.claude_cached_cwds
@@ -129,17 +165,17 @@ impl MultiProviderTransport {
                     .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                     .cloned()
                     .or_else(|| {
-                        params["cwd"]
-                            .as_str()
-                            .filter(|s| !s.is_empty() && *s != ".")
-                            .map(PathBuf::from)
-                    })
-                    .or_else(|| {
                         crate::collectors::find_claude_session_info(&raw_id)
                             .ok()
                             .flatten()
                             .map(|(c, _)| c)
                             .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                    })
+                    .or_else(|| {
+                        params["cwd"]
+                            .as_str()
+                            .filter(|s| !s.is_empty() && *s != ".")
+                            .map(PathBuf::from)
                     });
                 if let Some(ref c) = cwd {
                     self.claude_cached_cwds
@@ -366,13 +402,22 @@ impl MultiProviderTransport {
             }
             "turn/interrupt" => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
-                if let Some(session) = self.claude_sessions.get_mut(session_id) {
+                let has_session = if let Some(session) = self.claude_sessions.get_mut(session_id) {
                     let _ = session.interrupt();
-                }
-                if let Some(cancel) = self.claude_cancels.get(session_id) {
+                    true
+                } else {
+                    false
+                };
+                let has_cancel = if let Some(cancel) = self.claude_cancels.get(session_id) {
                     cancel.store(true, Ordering::SeqCst);
+                    true
+                } else {
+                    false
+                };
+                // Keep active turn_id until `turn/completed` drains so NativeSessionHost matches turn.id.
+                if !has_session && !has_cancel {
+                    self.claude_active_turns.remove(session_id);
                 }
-                self.claude_active_turns.remove(session_id);
                 Ok(json!({"ok": true}))
             }
             "thread/archive" | "thread/unarchive" => Ok(json!({"ok": true})),

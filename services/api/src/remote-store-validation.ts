@@ -9,7 +9,7 @@ import {
 } from "@agent-pulse/contracts";
 
 export const REMOTE_STORE_SCHEMA = `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON;
-  CREATE TABLE IF NOT EXISTS remote_runners (runner TEXT PRIMARY KEY, owner TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0, command_seq INTEGER NOT NULL DEFAULT 0, command_ack INTEGER NOT NULL DEFAULT 0, hello TEXT);
+  CREATE TABLE IF NOT EXISTS remote_runners (runner TEXT PRIMARY KEY, owner TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0, command_seq INTEGER NOT NULL DEFAULT 0, command_ack INTEGER NOT NULL DEFAULT 0, hello TEXT, device_name TEXT);
   CREATE INDEX IF NOT EXISTS remote_runner_owner ON remote_runners(owner,runner);
   CREATE TABLE IF NOT EXISTS remote_commands (runner TEXT NOT NULL, cmd_id TEXT NOT NULL, seq INTEGER NOT NULL, hub TEXT, cmd_digest TEXT, body TEXT NOT NULL, receipt TEXT, PRIMARY KEY(runner,cmd_id), UNIQUE(runner,seq));
   CREATE TABLE IF NOT EXISTS remote_sessions (owner TEXT NOT NULL, runner TEXT NOT NULL, hub TEXT NOT NULL, native TEXT NOT NULL, binding TEXT NOT NULL, PRIMARY KEY(runner,hub), UNIQUE(runner,native));
@@ -39,6 +39,8 @@ export function isWorkspaceAuthorizedInHello(
     Array.isArray(discoveryCandidates) &&
     discoveryCandidates.some(
       (c) =>
+        typeof c === "object" &&
+        c !== null &&
         typeof c.workspace_path === "string" &&
         norm(c.workspace_path) === target,
     );
@@ -68,6 +70,7 @@ export const RUNNER_HELLO_LIST_FIELDS = [
   "host_generation",
   "device_name",
   "workspaces",
+  "workspace_labels",
   "pending_approvals",
   "provider",
   "plugins",
@@ -360,9 +363,28 @@ export function validateRemoteMetaFrame(
   throw new RemoteStoreError("invalid_content_type");
 }
 
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      item === undefined ? null : canonicalizeJson(item),
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      const entry = (value as Record<string, unknown>)[key];
+      if (entry !== undefined) {
+        out[key] = canonicalizeJson(entry);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 export function commandDigest(command: RemoteCommand): string {
   return createHash("sha256")
-    .update(JSON.stringify(command), "utf8")
+    .update(JSON.stringify(canonicalizeJson(command)), "utf8")
     .digest("hex");
 }
 
@@ -552,8 +574,13 @@ export function validateRemoteEventRaw(
       throw new RemoteStoreError("unsafe_provider_event");
     const typed = item as Record<string, unknown>;
     const itemKeys = Object.keys(typed);
+    const optStr = (value: unknown, maxLen: number): boolean =>
+      value === undefined ||
+      (typeof value === "string" && value.length <= maxLen);
     if (
       typeof typed.id !== "string" ||
+      typed.id.length === 0 ||
+      typed.id.length > 256 ||
       itemKeys.some(
         (key) =>
           ![
@@ -570,7 +597,14 @@ export function validateRemoteEventRaw(
       ) ||
       !["commandExecution", "fileChange", "reasoning", "thinking"].includes(
         typed.type as string,
-      )
+      ) ||
+      !optStr(typed.command, 4096) ||
+      !optStr(typed.commandLine, 4096) ||
+      !optStr(typed.toolName, 256) ||
+      !optStr(typed.name, 256) ||
+      !optStr(typed.path, 1024) ||
+      !optStr(typed.status, 256) ||
+      !optStr(typed.text, 65536)
     )
       throw new RemoteStoreError("unsafe_provider_event");
     return;

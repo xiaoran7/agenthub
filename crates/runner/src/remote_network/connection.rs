@@ -129,12 +129,29 @@ pub(crate) fn send(socket: &mut Socket, value: Value) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn receive(socket: &mut Socket) -> Result<Value> {
+pub(crate) fn receive_with_deadline(
+    socket: &mut Socket,
+    deadline: Instant,
+    stopped: &AtomicBool,
+) -> Result<Value> {
     loop {
-        match socket.read()? {
-            Message::Text(text) => return Ok(serde_json::from_str(text.as_str())?),
-            Message::Close(_) => bail!("remote_closed"),
-            _ => {}
+        if stopped.load(Ordering::Acquire) {
+            bail!("remote_stopped");
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            bail!("remote_handshake_timeout");
+        };
+        set_timeouts(socket, remaining.min(Duration::from_millis(250)))?;
+        match socket.read() {
+            Ok(Message::Text(text)) => return Ok(serde_json::from_str(text.as_str())?),
+            Ok(Message::Close(_)) => bail!("remote_closed"),
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error.into()),
         }
     }
 }

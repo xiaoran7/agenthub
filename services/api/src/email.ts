@@ -87,6 +87,7 @@ export class HttpEmailVerificationSender implements EmailVerificationSender {
   ): Promise<void> {
     const response = await fetch(this.#endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         authorization: this.#authorization,
         "content-type": "application/json",
@@ -98,7 +99,9 @@ export class HttpEmailVerificationSender implements EmailVerificationSender {
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) {
+    const { ok } = response;
+    await response.body?.cancel().catch(() => {});
+    if (!ok) {
       throw new Error("email delivery service rejected the message");
     }
   }
@@ -170,6 +173,7 @@ export class ResendEmailSender implements EmailVerificationSender {
   ): Promise<void> {
     const response = await this.#fetch(this.#endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         authorization: this.#authorization,
         "content-type": "application/json",
@@ -177,7 +181,9 @@ export class ResendEmailSender implements EmailVerificationSender {
       body: JSON.stringify({ from: this.#from, to, subject, text, html }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) {
+    const { ok } = response;
+    await response.body?.cancel().catch(() => {});
+    if (!ok) {
       throw new Error("email delivery service rejected the message");
     }
   }

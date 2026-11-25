@@ -66,6 +66,7 @@ export default function PanelPage() {
       <RemoteConsole
         account={account}
         config={config}
+        onAccountUpdated={setAccount}
         onAuthenticationRequired={handleRequireLogin}
         onLoggedOut={() => setAccount(null)}
         onLogout={() => {

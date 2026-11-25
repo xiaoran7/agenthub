@@ -1,5 +1,94 @@
 # Changelog
 
+## [2.8.9] - 2026-11-25
+
+- **Android 移动端全量体验与视觉打磨 + 跨端工作区路径语义化（`crates/runner/`, `packages/contracts/`, `services/api/`, `apps/web/`, `apps/android/`）**：
+  - **工作区目录可读路径与机器归属**：Runner `remote_ready_payload` 新增脱敏 `workspace_labels` 映射（将主目录折叠为 `~`、Windows 盘符格式化为 `D: ...`，不暴露系统用户名或裸绝对路径），契约/API/Web/Android 全栈透传；移动端工作区选择器顶部明确展示当前电脑与快速切换入口，副标题以"机器 · 路径"替代原始 `ws-...-<16hex>` 哈希，并按活跃会话优先排序。
+  - **真实官方 Agent 品牌图标落地**：内置 Codex、Claude Code、Claude、Antigravity、Gemini、Gemini CLI、DeepSeek、Grok、Qwen、OpenAI 真实官方彩色 VectorDrawable 与高 DPI 图标（单色品牌自适应明暗主题）；会话列表左侧统一展示真实 Agent 品牌徽标，运行/可接管状态由标题下方元信息行承载；新建会话页同步升级品牌头图与引擎选择卡片。
+  - **新建会话页与输入框交互升级**：移除冗余的"快捷开场指令"小标题，补齐新建会话附件上传能力（含底部附件选择面板与预览芯片）；将"思考强度"从"高级"面板前置为新建会话与聊天输入框的直达胶囊按钮，一键切换。
+  - **聊天附件展开菜单与 Markdown 表格重构**：点击 `+` 改为弹出"添加附件"底部操作菜单（相册图片 / 拍摄照片 / 选择文件，支持 `FileProvider` 安全拍照与 Activity 重建状态保留）；重构内联 Markdown 递归解析器与自定义 `Layout` 表格渲染，彻底修复嵌套加粗反引号（如 `` **`#6004`（你）** ``）裸露与多列表格错位问题。
+  - **工具记录卡片化重构**：新增 `ToolActivityFormatter` 将工具调用提炼为中文语义动作、可读副标题、结构化参数键值卡片与 Diff 行统计徽标，告别裸 JSON 片段和 `{`/`@'` 首行噪声。
+  - **全应用导航转场与交互动效审查修复**：建立严格全序层级映射（`sessions < settings < hosts < launch < session`），彻底修复返回手势滑动方向相反与层叠透底问题；统一搜索栏、高级面板、Diff 预览与底部弹窗为自然垂向展开与平滑收起动效；同步按 800 行架构红线拆解 `privacy.rs`、`LaunchScreen.kt` 与 `MarkdownComponents.kt`。
+
+## [2.8.8] - 2026-11-25
+
+- **全仓二次深度安全与稳定性加固（`packages/contracts/`, `services/api/`, `crates/runner/`, `apps/web/`, `apps/android/`, `deploy/`, `scripts/`, `.github/`）**：
+  - **后端 API、三端存储与契约层**：修复 `DELETE /v1/devices/:deviceId` 忽略 `store.revokeDevice()` 返回值导致跨租户踢掉在线 Runner 并删除插件记录的越权漏洞，并在 `revokeRunner`/`deleteRunnerPlugins` 补齐归属校验；修复 `OneTimeBindingCodes` 异常释放未查 `isFresh` 致已吊销设备复活；修复 `/v3/remote/ws` 提前删 `unauthSockets` 绕过未认证连接上限问题并补单 IP 上限（8）与 1s 强制 `terminate()`；区分 `sequence_pruned` 与真实 `sequence_conflict` 防止 WS 吞掉分叉帧；补全 `remote-plugin-ssrf.ts` 尾点/单标签域名及 NAT64/`::ffff:0:`/`fec0::` 等 IPv6/IPv4 保留段拦截；新增迁移 `0019_push_subscriber_user.sql` 按 `(owner_id, subscriber_user_id)` 隔离 Web Push 订阅并在移出团队成员时级联清理；修复 `password-resets` 异步回滚 `unhandledRejection`；修复 `expectTimestamp` 拒绝年份 `0000`、`sqlite-store` 时区归一化与 `ROLLBACK` 异常保护、`plugin_status` SSE 广播与背压不丢帧、`POST /v1/team/invitations` 防枚举先鉴权及确认接口限流、PostgreSQL 5 处 `user_id::text` 索引失效与登录限流 24h 清理、`SqliteAccountStore` `workspaceView` 与 `last_seen_at` 60s 节流、`push.ts` 仅 `invalid_subscription` 删订阅及 `email.ts` 禁重定向。
+  - **Rust Runner 核心、插件安全、远控宿主与 IPC**：将远端插件注册表信任防线收紧为精确官方仓库路径前缀白名单（`plugins/security.rs`），禁止放行整个 `raw.githubusercontent.com`/`github.com` 域，远端 `set_registry`/`refresh_catalog`/`install` 与子文件 URL 均先验复核；通过自定义 `SafePluginResolver` 消除插件下载 DNS Rebinding TOCTOU 并扩展禁用 IPv4/IPv6 段与 `http://` 私网拦截；限制插件单次安装文件数（256）、总字节（64 MiB）、重复路径与保留原生前缀；修复 `state.json` 损坏读路径备份风暴并改用 `NamedTempFile` + `MoveFileExW` 原子落盘；拒绝负数 `received_seq`/`command_seq` 污染 SQLite Journal 且不击垮守护进程；补齐 Codex 掉线活跃轮次/审批清理与隔离、第三方插件/ACP 单会话失败隔离（不再触发全局 `mark_lost()`）、`handle_respond` 先发后删、常驻 Claude/Antigravity 静默退出补发终态、Claude 编辑 JSON Diff 安全脱敏截断、CWD 优先级以磁盘为准、Unix IPC `serve` 绑定前 fail-closed 目录校验、Remote WS 握手截止时间与 35s 入站心跳超时、Journal 投影转义后 8 MiB 硬上限，以及 `question_resolved` 保留 `question_id`、`ScanResetGuard`、`antigravity_status` `allow_sensitive` 门控、Win32 WebView2 `catch_unwind`/`closing` 与 `WM_COPYDATA` 返回值核验。
+  - **Rust Runner 采集器、回收站、用量账本与本地控制台**：修复 `claude_trash.rs` `move_into` 非跨卷错误误降级且部分删除失败时销毁回收站备份的数据丢失漏洞，并补齐三端 Trash `symlink_metadata` 拒软链与 `codex_trash` SQLite 路径收敛；修复 Claude 活跃会话超 32 轮误置 `index_pruned` 导致全量重读、截断尾行无限刷新、`claude_context` 超长行末次匹配污染 `msg_id`/`model` 及常规行漏滤 `<synthetic>`；解耦 Usage Ledger 53 周热力图不再被短周期截断并修复 `dirty_db_removals` 无人重驱动与冷库复活；修复 `lookup_session_context_usage` Antigravity 目录与 Codex `state_N`/`CODEX_HOME` 解析；修复 `antigravity/mod.rs` 路径穿越缺口及 `daemon_turn.rs` 区分 404/通信故障与 `CANCELED`/`SKIPPED` 终态；修复本地 `:4200` Dashboard 删除确认按钮永久禁用与幽灵会话冻结，并加固本地 HTTP Slowloris 累计超时与重复头拦截、`model_catalog` 后台去重与原子缓存、Unix `ChildJob` 释放顺序及 `AcpAppServer` 状态回滚。
+  - **Web 前端与 Android 原生端**：Web 修复 SSE/HTTP 双游标竞争丢 `receipt`/`ready`/`host_lost` 及 `truncated: true` 恢复、为 `RemoteToolCard` 问题 JSON 补强校验并全站接入 React `ErrorBoundary`、消除 `setState` updater 内就地修改 `lruOrder`/游标导致的 StrictMode 竞态、拆分 `SettingsPage` 独立表单防改密按回车误关页面，并补齐统一剪贴板兜底、移动端 CSS 级联、`Confirm`/`RemoteLaunchModal` Escape 捕获、`SettingsPage` Portal、`generation` 幂等键与 IME 防护；Android 修复 `SessionTree` 与 `RemoteInterventionCards` `LazyColumn`/`LazyRow` 重复 Key 闪退、以 `Mutex` 串行化 `configStore` 读写消除登出/切服凭据复活竞态、修复 `RemoteSessionSync` SSE 取消竞态防僵尸流耗尽配额、阻止瞬态 `ProviderException` 误删 Keystore 主密钥、全量清零 `main` 裸 `optString` 消灭 JSON `"null"` 陷阱，并修复接管残留草稿、`QuestionCard` 锁死、插件清单透传、`decodesAsUtf8` 短二进制误判与 SSE/附件转义预算。
+  - **部署、CI 与开源合规**：加固 Systemd `agent-pulse-web.service` 独立非特权账号与隔离目录（消除 `/run/nginx.pid` 冲突与后端密钥泄露）、收窄 `agent-pulse-api.service` 至 `StateDirectory`；为 `agenthub-web.conf.template` 引入 `${WEB_HOST}:${WEB_PORT}`（生产 Compose 与 Systemd 绑定 `127.0.0.1`）、收紧 43 位大小写敏感 Cookie 白名单、剥离 `X-User-Id`/`Forwarded` 并新增 `/health`/`/healthz` 代理；外层 Nginx 模板补齐 `X-Forwarded-Host` 与 `X-User-Id ""` 且 1Panel 模板拆分为标准 80/443；生产 Compose 切命名卷、`Connect-AgentHub.ps1` 改纯 ASCII + 环境变量传码 + Remote v3 入口并过 Windows PowerShell 5.1 零错误解析；CI 补 DooD 安全 `Validate Web Proxy Config` 与 `postgres-checks` 集成测试；清理 `.dockerignore` 递归规则、`LICENSE` 统一为 `Tanner` 署名、`SECURITY.md`/`CODE_OF_CONDUCT.md` 切至 GitHub Private Vulnerability Reporting 入口。
+
+## [2.8.7] - 2026-11-25
+
+- **全仓代码审查 P0/P1/P2 安全、稳定性与跨端契约修复（`packages/contracts/`, `services/api/`, `crates/runner/`, `apps/web/`, `apps/android/`, `deploy/`, `scripts/`, `.github/`）**：
+  - **后端 API 与契约层**：修复 PostgreSQL `pruneExpiredData()` 查询错误表名 `agent_pulse_login_attempts`（应为 `agent_pulse_login_limits`）并消除重复调度与静默吞错；三端登录限流改先校验活跃 `blocked_until` 再滚窗并为 `/v1/auth/login` 与 `/v1/auth/password` 补齐 IP 限流桶；修复 `AGENT_PULSE_TRUST_PROXY_HOPS` 被丢弃及 Fastify v5 数值代理适配；修复 `/v3/remote/stream` 撤权不断流与插件推送漏检；修复 `/v3/remote/ws` 无连接上限及 `close(1008)` 后管线帧继续执行；修复 PostgreSQL + Bearer 非 UUID 报错 `22P02` 与 `SqliteAccountStore` 事务/旧令牌吊销/停用用户过滤；补齐 `member` 禁 `approval_policy: "never"`、数值时间戳重放比对、`RemoteContentStore` 动态 SQL 句柄泄漏与分批删除、头像 Base64 校验异常封装、日历合法日期校验与 `commandDigest` 键序规范化。
+  - **Rust Runner 核心、安全、IPC 与本地控制台**：收紧插件源与运行时安全边界（禁止 `http`/`https` 源引用 `file://` 子路径、默认禁止任意原生可执行插件除非显式设 `AGENTHUB_ALLOW_NATIVE_PLUGINS=1`、远端 `set_registry` 限定可信源白名单、DNS 校验 fail-closed 与扩展禁 IP 段、锁内原子提交及防损坏状态静默清零）；收紧本地 `:4200` CSP 至 `script-src 'self'` 并将内联 `AppLayout` 迁至 JSON 数据块；消除 `./claude` CWD 劫持；移除远端 `ack`/`Connected` 整数循环死锁并修正出站 `sent` 水位推进与切服重置；补齐 Claude/Antigravity `thread/read` 与 `thread/resume` 真实会话存在校验；修复 Win32 WebView2 跨 COM 重入 `RefCell` Panic、`WM_COPYDATA`/`WM_DPICHANGED` 空指针检查及托盘退出布尔极性与优雅停机；Unix IPC Socket 迁出 `/tmp` 至 `0700` 私有目录并增加 `SO_PEERCRED` 校验与并发上限；补齐 Markdown 反引号路径脱敏、Claude `turn/interrupt` 状态卡死、ACP/Codex 故障隔离、附件上限与 `binding.json` 跟随 `--identity`。
+  - **Runner 采集器、解析器与用量账本**：修复 Antigravity 守护轮询 `next_step` 循环内自增导致 O(K^2) 重复事件与工具配对错位、HTTP 读体错误静默吞掉与超时误返 `Ok`；加固 Codex/Antigravity/Claude Trash 路径 containment 与防符号链接跟随；修复 `execution.rs` `stdin` 同步写死锁、Antigravity 重复投递与 `BrokenPipe` 僵尸泄漏；无条件校验 `session_id` 禁 `-` 前缀；`workspace.rs` 仅在 Windows 转换 `\`；修复 `provider_binary.rs` 字面量 `0x07` 控制字节与 `dunce::canonicalize`；修复大文件 UTF-8 中间 Seek 报错、有界行读取防 OOM、用量 SQLite 纯读路径 `SQLITE_OPEN_READ_ONLY` 与删队列防丢、Claude 上下文头尾重叠双计与去重索引标记、ACP JSON 截断前移与基于可执行文件名识别网关、Codex `busy_timeout` 及 `ORDER BY` 补全。
+  - **Web 前端与部署配置**：`AttentionQueue` 改用未过滤全量会话树恢复跨 Agent 审批提醒；补齐所有 `getProviderInfo` 的插件参数；修正 `mergeRunnerHelloEntries` 令实时瘦字段优先于 30s 缓存；`trimSupersededEvents` 保留快照前 `turn/completed` 与已确认回执防旧审批复活；修复冻结 `ConversationItem` 原地修改破坏 `React.memo`、LRU 淘汰未清游标致切回白屏、普通 `send_prompt` 重试乐观 ID 错位及新建权限模式被重置；修正 `remote-desktop.css` 与移动端响应样式级联顺序、`SettingsPage` `z-index`、模态框 Portal/Escape 拦截、非安全上下文剪贴板兜底、工具组手折与中文 IME Enter 守卫；自托管 Compose 切命名卷、外层 Nginx 示例补 `client_max_body_size 12m` 与 TLS/HSTS 加固、`api.Dockerfile` 增 `HEALTHCHECK`、Systemd 最小权限与 `0640` 配置加固、更新 `SECURITY.md` 与 CI `permissions: contents: read`。
+  - **Android 原生端**：修复 Keystore 密钥损坏永久登录闪退（支持删坏键重试一次并将保存移至 IO 线程）；修复 >64 KB SSE 帧及通道满时游标跃过丢事件（增有界读行器与 `gapDetected` 补拉守卫）；收窄仅 `401` 触发登出（`403` 不销毁凭据）；引入 `authJob` 取消与 `sessionEpoch` 隔离过时协程并集中清理登出/切服状态；`CommandLedger` 纳入 `hostGeneration`、异步哈希并清理 `409`/`413`/参数错误；修正被拒命令 `"send_prompt"` 判断与 `receipt.code` 映射、支持字符串 `turn.error`、解析会话顶层 `provider`、全量替换裸 `optString` 消灭 AOSP `"null"` 陷阱、补齐附件合并预算/并发锁、问题卡失败恢复、`takeoverCommandId` 防死锁、`rememberSaveable`、`DiffPreview` 单 `AnnotatedString` 分页与跨端转录制对齐。
+
+## [2.8.6] - 2026-11-25
+
+- **全仓契约、API 服务与 Runner 模块化彻底解耦（`packages/contracts/`, `services/api/`, `crates/runner/`, `scripts/check-line-limits.py`）**：
+  - **拆解 `packages/contracts/src/index.ts`（1,143 行 -> 22 行入口）**：按职责拆分为 `sync-types.ts`、`sync-validators.ts`、`device-sync.ts`、`auth-sync.ts`、`sync-batch.ts`，保持外部导出 100% 兼容。
+  - **清零 `services/api/src` 循环依赖与全部 800 行超标单体**：
+    - 抽离 `store-types.ts` 消除 `store <-> store-schemas` 环；将 `accounts.ts`（1,870 行）拆为 `account-types.ts`、`account-auth.ts`、`memory-account-state.ts`、`memory-account-workspace.ts`、`memory-account-store.ts`，消除 `accounts <-> account-helpers` 与 `accounts <-> security-guards` 环（全 API 循环依赖清零）。
+    - 将 `app.ts`（1,715 行 -> 217 行）按路由域拆出 `routes/gateway-context.ts`、`auth-routes.ts`、`team-billing-routes.ts`、`device-push-routes.ts`，同步清理 4 个未引用死常量。
+    - 将 `remote-store.ts`（965 行 -> 748 行）的帧入库事务逻辑抽离至 `remote-store-ingest.ts`；将 `postgres-store.ts`（2,883 行 -> 287 行门面）拆分为 `postgres/pg-shared.ts`、`pg-account-auth.ts`、`pg-account-lifecycle.ts`、`pg-workspaces.ts`、`pg-billing-audit-push.ts`、`pg-device-ingest.ts`、`pg-sync-read.ts`。
+  - **拆解 Runner 本地控制台静态资产与 Rust 反向依赖**：
+    - 将 `crates/runner/resources/dashboard.js`（5,230 行）拆为 `resources/dashboard/` 下 11 个语义脚本模块（单文件 320–658 行），将 `dashboard.css`（1,882 行）拆为 4 个语义样式模块（单文件 316–611 行）；升级 `web_server/assets.rs` 与 `server.rs` 按模块嵌入拼装并支持开发态递归热监听。
+    - 解除 Runner 内部 5 组反向模块依赖：`device_name.rs` 承载通用可执行探测（解除 `claude_gateway <-> web_server`）、`CachedDashboardEntry` 纳入 `plugin_gen` 校验并把 `live::start` 扫描唤醒改为回调注入（解除 `live <-> web_server` 与 `live <-> remote_host`）、`default_upstream_model_for_claude_code` 归位 `claude_gateway`（解除 `claude_gateway <-> model_catalog`）、提升 `lru_cache.rs` 至顶层叶子模块（解除 `collectors <-> conversation`）。
+  - **全仓行数门禁清零历史豁免**：清空 `scripts/check-line-limits.py` 的 `LEGACY_BASELINE_CAPS`（全仓历史超标豁免归 0），并将 `crates/runner/resources` 与 `.js` 纳入 800 行硬红线。
+
+- **Web 前端模块化拆解与死代码清理（`apps/web/`, `scripts/check-line-limits.py`）**：
+  - **消除前端循环依赖**：抽离 `apps/web/src/lib/remote-types.ts` 统一承载远程会话/事件/命令契约类型，`lib/remote.ts` 保留兼容重导出，彻底清零 `apps/web/src` 内部 3 组循环导入。
+  - **拆解 `RemoteConsole.tsx`（5,358 行 -> ~700 行）**：将状态同步、侧边栏级联与会话树、会话启动、命令派发、输入与草稿队列抽离为 4 个逻辑 Hook + 1 个纯函数模块（`components/remote/useRemoteSync.ts`、`useRemoteSidebarState.ts`、`useRemoteLaunch.ts`、`useRemoteCommandDispatch.ts`、`useRemoteComposer.ts`、`remote-model-options.ts`），视图拆分为 9 个正交子组件（`RemoteSidebar`、`RemoteSidebarSelectors`、`RemoteSessionTree`、`RemoteHeader`、`RemoteWelcome`、`RemoteTimeline`、`RemoteApprovalCard`、`RemoteQuestionCard`、`RemoteToolGroup`、`RemoteComposer`），并将审批/提问卡片局部交互态下沉至卡片内部。
+  - **拆解 `SettingsPage.tsx`（1,242 行 -> 194 行）**：按分区抽离 `components/settings/AccountSettingsSection.tsx`、`DevicesSettingsSection.tsx`、`AuditSettingsSection.tsx` 与 `AppearanceAndAppSections.tsx`。
+  - **删除无用死代码与死样式**：移除已退役 v1 监控面板遗留的 4 个零生产引用模块及对应测试（`lib/classify.ts`、`connection-status.ts`、`device-summary.ts`、`session-navigation.ts`），清理 `lib/types.ts`、`lib/api.ts` 与 `remote-console-constants.tsx` 中废弃导出；裁剪 `globals.css`、`remote.css` 与 `remote-desktop.css` 中 683 条未引用历史选择器和 2 个无用 `@keyframes`，并按原有级联顺序拆分为多个 `<=661` 行的语义样式模块（`globals` 构建产物由 `77.98 kB` 降至 `35.49 kB`）。
+  - **收紧行数门禁棘轮**：从 `scripts/check-line-limits.py` 的 `LEGACY_BASELINE_CAPS` 移除 `RemoteConsole.tsx` 与 `SettingsPage.tsx`，并将 `.css` 纳入全仓 800 行硬红线检查。
+
+## [2.8.5] - 2026-11-24
+
+- **Android 审查修复**：恢复跨电脑的待处理队列并修正抽屉计数。接管回执等待期间可停止已运行的任务。工具事件更新时保留已打开的记录，滚动后恢复工具详情的展开状态。设备管理返回按钮的无障碍文案与实际操作一致，网关地址的校验提示随表单保留。
+
+- **Android 会话与导航**：手机首页采用无卡片的会话列表和电脑筛选胶囊，可按日期、工作区或状态分组，并单独筛选在线会话。首页底部进入新建流程，左侧抽屉可打开电脑管理和账户设置，宽屏保留导航栏。
+- **Android 聊天与设置**：聊天中的连续工具调用以执行次数收起，点击查看底部面板里的真实状态和详情。设备离线时保留已读转录并显示连接状态。账户、外观与连接设置使用分组列表，浅色主题采用中性背景和低饱和绿色。
+
+## [2.8.4] - 2026-11-23
+
+- **Android 真机实测 UI/UX 修复与打磨（`apps/android/`）**：
+  - **修复"电脑"页顶栏布局塌陷（P0）**：`OrcaPrimaryButton` / `OrcaSecondaryButton` 新增 `fillWidth: Boolean = true` 参数，`HostsScreen` 顶栏"生成绑定码"按钮传入 `fillWidth = false`，彻底修复按钮在 `Row` 内抢占全宽导致标题塌陷、电脑卡片被挤出屏底的问题。
+  - **修复聊天输入栏附件图标（P1）**：重写 `ComposerAccessories.kt` 中 `OrcaAttachIcon` 路径为完整斜向回形针轮廓，消除半截 `∩` 错画。
+  - **会话首屏渐进渲染不再被骨架屏遮挡（P1）**：`RemoteChrome.kt` 的 `RemoteTranscriptArea` 改为仅在 `!seeded && blocks.isEmpty() && seedError.isBlank()` 时显示骨架屏，首批消息到达即刻呈现。
+  - **首页排版与操作去冗（P2）**：`OrcaFilterPill` 改为无衬线 `labelMedium` 字体去除等宽终端感；移除 `SessionsScreen` 中部重复的"刷新"文字入口。
+  - **新建页卡片与长列表工作区搜索（P2）**：收紧 `AgentEngineCardGrid` 卡片内边距并允许 2 行显示避免 `Coding Assistant` 截断；收紧底部 4 枚芯片间距；`LaunchOptionSheet` 在条目超过 8 项时提供顶部实时关键词筛选框。
+  - **120 FPS 扁平虚拟化会话列表与真·Qoder 移动端体验重构（`AgentHubScreens.kt` / `LaunchScreen.kt` / `RemoteTranscriptViews.kt` / `RemoteChrome.kt`）**：
+    - 彻底消灭 `DeviceGroupSection` 在单个 `LazyColumn` 项内 `forEach` 嵌套渲染上千条会话导致的滑动卡顿，改为全扁平虚拟化 `items(flatItems, key, contentType)`（视口外零组合），同时为聊天列表补充 `contentType` 并支持 R8 Release 编译优化。
+    - 首页去除冗余三栏 KPI 仪表盘，改为 Qoder 极简顶栏（内联在线/运行状态胶囊 + 实时搜索按钮）、可折叠分组头与清爽双行会话行。
+    - 新建页改为 Qoder 居中欢迎画布 + 顶栏一键切换电脑胶囊 + 底部一体化 24dp 悬浮输入胶囊（目录/模型/权限芯片收纳在输入框底栏内），消除中屏大块空白。
+    - 聊天页 Assistant 回复去外框卡片化，直接铺排在洁净画布上，兼顾 Qoder 视觉与更低绘制开销。
+
+## [2.8.3] - 2026-11-23
+
+- **Qoder 移动端视觉语言与主题体系升级（`apps/web/`, `apps/android/`, `docs/DESIGN_SYSTEM.md`）**：
+  - **Web 端青岚 / 森墨双色与产品级排版**：`cds-tokens.css`、`globals.css`、`remote.css` 与 `theme.ts` 全面对齐 Qoder 标志性的青瓷薄荷浅色（`#F7FAF8` / `#267861` / `#1F6A57`）与林墨翡翠暗色（`#0F1110` / `#5CB870` / `#8EE5A1`），同步 PWA 状态栏 `theme-color`、柔和 20px 薄荷底用户气泡、22px 悬浮胶囊输入栏、暗色主 CTA 深墨高对比文字（`#0B1710`）及 `Inter` / `HarmonyOS Sans SC` / `MiSans` 中英混排字体栈。
+  - **Android 端 Qoder 森墨 / 青岚原生主题与组件打磨**：`AppearanceTheme.kt` 新增 `FOREST_DARK`（森墨）与 `MINT_LIGHT`（青岚）并设为 `SYSTEM` 跟随系统默认配色（保留原有纸墨/石墨/午夜蓝可选），全部文本与按钮通过 WCAG AA 对比度校验；升级 24dp 悬浮胶囊输入栏（`RemoteComposerDock.kt`）、柔和微着底用户气泡与翡翠活点（`RemoteTranscriptViews.kt`）、高不透明度实体审批卡片（`RemoteInterventionCards.kt`）及柔和 `SemiBold` 标题字阶（`Theme.kt` / `RemoteChrome.kt`）。
+  - **移动端 Qoder 导航逻辑、拇指区按钮位置与可视化 Agent 选择（`apps/android/`, `apps/web/`）**：
+    - **Android 首页与底栏**：`SessionsScreen` 新增右下角悬浮胶囊 `+ 新任务` FAB（自动带入当前筛选的 Agent 引擎），顶栏去冗清爽；`BottomBar` 激活 Tab 增加 Qoder 薄荷圆角高亮胶囊指示器。
+    - **Android 对话优先新建页**：重构 `LaunchScreen.kt` 并拆分 `LaunchPickerComponents.kt`，以 2 列带原生图标的"选择执行 Agent"卡片网格与快捷开场指令居中呈现，底部固定 24dp 悬浮输入胶囊 + 四枚单手弹出 Sheet 芯片（支持直接在新建页切换在线**电脑**、**工作区**、**模型**、**权限**），高级参数（思考强度/沙箱/原生会话 ID）默认折叠。
+    - **Android 会话页紧急停止下沉拇指区**：`RemoteBottomConsoleDock` 在运行中直接于底部控制条提供醒目红琥珀"停止"胶囊，单手一键中断。
+    - **Web 端可视化 Agent 卡片与移动端拇指区操作**：升级 `RemoteLaunchModal.tsx` 为移动端带拖拽把手的 Bottom Sheet，新增 2 列可视化 Agent 引擎图标卡片直选网格、电脑/工作区并排布局及可折叠"更多选项"；移动端空态页增加右下角悬浮胶囊 `+ 新任务` FAB 并更新主题说明文案。
+
+## [2.8.2] - 2026-11-23
+
+- **低延迟实时流式远控与桌面会话零抢锁镜像（`crates/runner/`, `apps/web/`, `apps/android/`）**：
+  - **Web / Android 零轮询 SSE 直消费**：Web 新增 `apps/web/src/lib/remote-sse-sync.ts`（含 `parseDirectSseBatch` 与 `createRafBatcher` 16ms 帧合并），Android 升级 `SseLineParser`（移除 4 KiB 截断限制并直接解码完整 `RemoteEvent`）与 `RemoteSessionSync.kt`（`SessionSyncSignal` 单写者合流）；会话首屏完成后直接消费 `/v3/remote/stream` 推送的流式 delta 与 `binding` 变更，消除每帧 2 次串行 HTTP GET（省去 2×WAN RTT），仅在 `receipt`、`ready`、`turn/completed` 或断层时触发 HTTP 补偿校验。
+  - **Web 60 FPS 流式 Markdown 块级冻结**：新增 `apps/web/src/lib/markdown-blocks.ts` 并在 `MarkdownView.tsx` 中将流式/长消息拆分为已闭合的 `React.memo` 冻结块与末尾活跃块，避免每个 token delta 重复全量解析整条消息的 Markdown AST，完整保留围栏代码块与 GFM 表格边界。
+  - **Runner 低延迟事件唤醒与出站优先级车道**：新增 `crates/runner/src/remote_network/outbound_lanes.rs`，在保持 `Data` 帧连续 `seq` 的前提下让 `Ack`（合并至最高序号）与 `Control` 帧优先出站，并将 `network_loop.rs` 固定 50ms 读超时改为活跃 `4ms` / 空闲 `20ms` 自适应超时；`remote_runner.rs` 将主循环睡眠改为 `events.recv_timeout(...)` 事件唤醒并将单批出站上限提升至 64 帧。
+  - **桌面原生会话零抢锁实时镜像**：`conversation/loader.rs` 新增调用方持有的 `TranscriptFileFingerprint` 元数据校验（不受 10 秒缓存 TTL 失效重读影响）；新增 `crates/runner/src/remote_host/live_mirror.rs` 并接入 `NativeSessionHost::poll()`，在桌面原生客户端（Codex / Claude Code / Antigravity / ACP 插件）继续写入本地转录时免 `TakeControl` 抢锁自动推送 `history/snapshot` 与 `thread/tokenUsage/updated`（置 `binding: None` 避免触发全局列表轮询，单 tick 限流 4 会话并对缺失文件指数退避），空会话首条桌面消息可实时镜像，Runner 自身回合完成后自动刷新基线防回声。
+  - **代码审查边界加固**：Web/Android 修复切回缓存会话期间 SSE 早到跳号与 Gateway 重置游标回退、Android 通道满载不丢 `Reconcile`、以及 Web Markdown 块切分对引用式链接/脚注与松散有序列表的兼容性。
+
 ## [2.8.1] - 2026-11-22
 
 - **插件生态安全加固与多端协同修复（代码审查 #2～#9）**：
@@ -56,7 +145,7 @@
 
 ## [2.7.10] - 2026-11-19
 
-- **托盘「配置」页去硬编码并改为客户端真实配置优先发现（`crates/runner/src/claude_gateway/`, `crates/runner/src/tray_menu/`, `crates/runner/src/usage_ledger/`）**：
+- **托盘"配置"页去硬编码并改为客户端真实配置优先发现（`crates/runner/src/claude_gateway/`, `crates/runner/src/tray_menu/`, `crates/runner/src/usage_ledger/`）**：
   - **去掉固定 6 项硬编码与静态兜底**：将 `ClientRouteSummary.agent_id`/`title` 改为 `String`；移除 `route_summary.rs` 无条件塞入 6 个客户端 `"Official · 直连"` 的逻辑、移除 `tray_menu/builder.rs` 的 6 项 `is_core` 白名单与 3 行写死加载占位行，并将 `is_loading` 收敛为 `!is_warm`（避免空列表长期停在"加载中"）；移除 `detail_inspect.rs` 中 Antigravity 的静态默认模型列表；
   - **客户端实时生效配置优先，拒绝过期 CC Switch 劫持**：
     - `cc_switch.rs` 新增 `proxy_takeover` 真实接管判定（联合检查 `proxy_config.enabled`/`proxy_enabled`/`live_takeover_active`、`proxy_live_backup` 与 `settings.proxy_takeover`）、`discover_all_cc_switch_active_providers()` 及 `cc_switch_manages_live_url()`，仅在 CC Switch 实际处于代理接管或与客户端实时端点同源时采信其记录；

@@ -152,7 +152,7 @@ pub struct RankRow {
     pub timing: Timing,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DayPoint {
     /// `YYYY-MM-DD`, local.
     pub date: String,
@@ -192,6 +192,15 @@ pub struct SessionRow {
 /// `recent_limit` bounds the request table's rows; the series, rankings and
 /// heatmap are always computed from every call in the period.
 pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> LedgerDigest {
+    digest_with_heat(records, period, recent_limit, None)
+}
+
+pub(crate) fn digest_with_heat(
+    records: &[LedgerRecord],
+    period: Period,
+    recent_limit: usize,
+    precomputed_heat: Option<Vec<DayPoint>>,
+) -> LedgerDigest {
     let now = chrono::Local::now().timestamp_millis();
     let since = period.since_ms(now);
     let selected: Vec<&LedgerRecord> = records.iter().filter(|r| r.t >= since).collect();
@@ -208,7 +217,6 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
 
     let bucket = bucket_of(period);
     let mut points: std::collections::BTreeMap<i64, SeriesPoint> = Default::default();
-    let mut heat: std::collections::BTreeMap<String, DayPoint> = Default::default();
     let mut models: HashMap<String, RankRow> = HashMap::new();
     let mut model_at: HashMap<(String, &'static str), RankRow> = HashMap::new();
     let mut agents: HashMap<&'static str, RankRow> = HashMap::new();
@@ -241,18 +249,6 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
             ..SeriesPoint::default()
         });
         accumulate(point, record);
-
-        let day = local_day(record.t);
-        let day_point = heat.entry(day.clone()).or_insert_with(|| DayPoint {
-            date: day,
-            ..DayPoint::default()
-        });
-        day_point.calls = day_point.calls.saturating_add(1);
-        day_point.tokens = day_point.tokens.saturating_add(record.total_tokens());
-        day_point.cost += record.cost;
-        if failed {
-            day_point.errors = day_point.errors.saturating_add(1);
-        }
 
         sessions
             .entry(record.session.as_ref())
@@ -325,10 +321,7 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
     // buckets across the chart
     digest.series = points.into_values().collect();
     digest.series.sort_by_key(|p| p.t);
-    digest.heat = heat
-        .into_values()
-        .filter(|d| d.date.as_str() >= digest.heat_from.as_str())
-        .collect();
+    digest.heat = precomputed_heat.unwrap_or_else(|| build_heat_days(records, now));
 
     // every ranking sorts by tokens, then by name so a tie never reshuffles
     let sorted = |mut rows: Vec<RankRow>| {
@@ -428,8 +421,38 @@ impl From<SessionAgg> for SessionRow {
     }
 }
 
+/// Computes the 53-week daily activity heatmap from every record in the calendar
+/// window, decoupled from the selected period totals.
+pub(crate) fn build_heat_days(records: &[LedgerRecord], now: i64) -> Vec<DayPoint> {
+    let heat_since = heat_window_start(now);
+    let heat_from = local_day(heat_since);
+    let rough_floor = heat_since.saturating_sub(86_400_000);
+    let mut heat: std::collections::BTreeMap<String, DayPoint> = Default::default();
+    for record in records {
+        if record.t < rough_floor {
+            continue;
+        }
+        let day = local_day(record.t);
+        if day.as_str() < heat_from.as_str() {
+            continue;
+        }
+        let failed = record.error.is_some() && !record.recovered;
+        let day_point = heat.entry(day.clone()).or_insert_with(|| DayPoint {
+            date: day,
+            ..DayPoint::default()
+        });
+        day_point.calls = day_point.calls.saturating_add(1);
+        day_point.tokens = day_point.tokens.saturating_add(record.total_tokens());
+        day_point.cost += record.cost;
+        if failed {
+            day_point.errors = day_point.errors.saturating_add(1);
+        }
+    }
+    heat.into_values().collect()
+}
+
 /// The heatmap's first day: 53 weeks back, Monday-first, so the grid is whole.
-fn heat_window_start(now: i64) -> i64 {
+pub(crate) fn heat_window_start(now: i64) -> i64 {
     let day = 86_400_000i64;
     let offset = local_offset_ms(now);
     let local = now + offset;

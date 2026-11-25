@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   rust-checks:
     name: Rust Workspace Checks
@@ -64,26 +67,101 @@ jobs:
 
       - name: Validate Web Proxy Config
         env:
+          WEB_HOST: 0.0.0.0
           WEB_PORT: 3100
           WEB_ROOT: /usr/share/nginx/html
           GATEWAY_ORIGIN: http://127.0.0.1:3101
           GATEWAY_ACCESS_TOKEN: ""
           ENVSUBST_FILTER: "^(GATEWAY_|WEB_)"
         run: |
-          docker run --rm \
+          set -euo pipefail
+          CID="agenthub-nginx-validate-$$"
+          TMP_DIR="$(mktemp -d)"
+          cleanup() {
+            docker rm -f "$CID" >/dev/null 2>&1 || true
+            rm -rf "$TMP_DIR"
+          }
+          trap cleanup EXIT
+          mkdir -p "$TMP_DIR/templates"
+          cp deploy/nginx/agenthub-web.conf.template "$TMP_DIR/templates/default.conf.template"
+          docker create --name "$CID" \
+            -e WEB_HOST \
             -e WEB_PORT \
             -e WEB_ROOT \
             -e GATEWAY_ORIGIN \
             -e GATEWAY_ACCESS_TOKEN \
             -e ENVSUBST_FILTER \
-            -v "$PWD/deploy/nginx/agenthub-web.conf.template:/etc/nginx/templates/default.conf.template:ro" \
-            nginx:1.29-alpine nginx -t
+            nginx:1.29-alpine nginx -t >/dev/null
+          docker cp "$TMP_DIR/templates" "$CID:/etc/nginx/"
+          docker start -a "$CID"
+          docker cp "$CID:/etc/nginx/conf.d/default.conf" "$TMP_DIR/default.conf"
+          grep -qF "listen 0.0.0.0:3100;" "$TMP_DIR/default.conf"
+          grep -qF "proxy_pass http://127.0.0.1:3101;" "$TMP_DIR/default.conf"
+          grep -qF 'proxy_set_header X-User-Id "";' "$TMP_DIR/default.conf"
+          grep -qF 'proxy_set_header Forwarded "";' "$TMP_DIR/default.conf"
+          grep -qF "location = /health" "$TMP_DIR/default.conf"
+          ! grep -qE '\$\{(WEB_|GATEWAY_)' "$TMP_DIR/default.conf"
 
       - name: Run Tests
         run: npm test
 
       - name: Test Web Proxy Contract
         run: bash scripts/test-web-proxy.sh
+
+  postgres-checks:
+    name: PostgreSQL Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run PostgreSQL Store & Event Broker Tests
+        run: |
+          set -euo pipefail
+          NET="agenthub-pg-test-$$"
+          PG_NAME="$NET-postgres"
+          cleanup() {
+            docker rm -f "$PG_NAME" >/dev/null 2>&1 || true
+            docker network disconnect -f "$NET" "$(hostname)" >/dev/null 2>&1 || true
+            docker network rm "$NET" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker network create "$NET" >/dev/null
+          docker network connect "$NET" "$(hostname)" >/dev/null 2>&1 || true
+
+          docker run -d --name "$PG_NAME" --network "$NET" \
+            -e POSTGRES_USER=agenthub \
+            -e POSTGRES_PASSWORD=agenthub \
+            -e POSTGRES_DB=agenthub_test \
+            postgres:16-alpine >/dev/null
+
+          PG_IP=""
+          PG_READY=0
+          for _ in $(seq 1 30); do
+            PG_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$PG_NAME" 2>/dev/null || true)"
+            if [ -n "$PG_IP" ] && docker exec "$PG_NAME" pg_isready -U agenthub -d agenthub_test >/dev/null 2>&1; then
+              PG_READY=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ "$PG_READY" -ne 1 ]; then
+            docker logs "$PG_NAME" >&2 || true
+            echo "FAIL: temporary PostgreSQL container did not become ready" >&2
+            exit 1
+          fi
+
+          export AGENT_PLATFORM_TEST_DATABASE_URL="postgresql://agenthub:agenthub@${PG_IP}:5432/agenthub_test"
+          (cd services/api && ../../node_modules/.bin/tsx --test test/postgres-store.test.ts test/events.test.ts)
 
   android-checks:
     name: Android Unit Tests

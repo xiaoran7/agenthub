@@ -7,7 +7,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -195,75 +194,11 @@ fun EmptyPanel(
     }
 }
 
-data class BottomDestination(
+data class NavigationDestination(
     val id: String,
     val label: String,
     val badge: Int = 0,
 )
-
-/**
- * Compact phone bottom bar (`heightIn(min = 60.dp)` so system `fontScale` up to
- * 2.0x expands cleanly without clipping labels, plus horizontal cutout insets).
- */
-@Composable
-fun BottomBar(
-    destinations: List<BottomDestination>,
-    current: String,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = OrcaColors.bgPanel,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
-                    .heightIn(min = OrcaSpace.bottomBar)
-                    .padding(vertical = OrcaSpace.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            destinations.forEach { destination ->
-                val active = destination.id == current
-                val tint =
-                    if (active) OrcaColors.accentBlue
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                Column(
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .heightIn(min = OrcaSpace.touch)
-                            .clip(RoundedCornerShape(OrcaRadius.button))
-                            .clickable { onSelect(destination.id) }
-                            .padding(vertical = 2.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Box(contentAlignment = Alignment.TopEnd) {
-                        Box(Modifier.padding(horizontal = 10.dp, vertical = 2.dp)) {
-                            BottomGlyph(id = destination.id, tint = tint)
-                        }
-                        if (destination.badge > 0) {
-                            DestinationBadge(count = destination.badge)
-                        }
-                    }
-                    Text(
-                        text = destination.label,
-                        style = OrcaType.mono,
-                        color = tint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-    }
-}
 
 /**
  * Adaptive vertical navigation rail for tablets, foldables, and wide landscape
@@ -271,7 +206,7 @@ fun BottomBar(
  */
 @Composable
 fun SideNavigationRail(
-    destinations: List<BottomDestination>,
+    destinations: List<NavigationDestination>,
     current: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -313,7 +248,7 @@ fun SideNavigationRail(
                     ) {
                         Box(contentAlignment = Alignment.TopEnd) {
                             Box(Modifier.padding(horizontal = 10.dp, vertical = 2.dp)) {
-                                BottomGlyph(id = destination.id, tint = tint)
+                                NavigationGlyph(id = destination.id, tint = tint)
                             }
                             if (destination.badge > 0) {
                                 DestinationBadge(count = destination.badge)
@@ -349,7 +284,7 @@ private fun DestinationBadge(count: Int) {
 }
 
 @Composable
-private fun BottomGlyph(id: String, tint: Color) {
+private fun NavigationGlyph(id: String, tint: Color) {
     when (id) {
         "sessions" -> OrcaTerminalIcon(tint, 19.dp)
         "hosts" -> OrcaMonitorIcon(tint, 19.dp)
@@ -386,7 +321,10 @@ fun OrcaFilterPill(
         ) {
             Text(
                 text = label,
-                style = OrcaType.mono,
+                style =
+                    MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    ),
                 color = if (enabled) tint else tint.copy(alpha = 0.38f),
                 maxLines = 1,
             )

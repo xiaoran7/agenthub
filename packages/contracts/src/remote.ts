@@ -95,6 +95,7 @@ export interface RemoteReady {
   /** Human-facing name for the computer; the device id stays a backend key. */
   device_name?: string;
   workspaces: string[];
+  workspace_labels?: Record<string, string>;
   sessions: RemoteBinding[];
   models?: unknown;
   discovery?: unknown;
@@ -126,6 +127,7 @@ export function parseRemoteReady(value: unknown): RemoteReady {
     "host_generation",
     "device_name",
     "workspaces",
+    "workspace_labels",
     "sessions",
     "models",
     "discovery",
@@ -142,16 +144,30 @@ export function parseRemoteReady(value: unknown): RemoteReady {
     // A blank label would render as an empty device name in the console.
     if ((ready.device_name as string).trim() === "") invalid();
   }
-  if (!Array.isArray(ready.workspaces)) invalid();
+  if (!Array.isArray(ready.workspaces) || ready.workspaces.length > 512)
+    invalid();
   for (const workspace of ready.workspaces)
     if (!isRemoteWorkspaceId(workspace)) invalid();
   if (new Set(ready.workspaces).size !== ready.workspaces.length) invalid();
-  if (!Array.isArray(ready.sessions)) invalid();
+  if (ready.workspace_labels !== undefined) {
+    const labels = object(ready.workspace_labels);
+    const entries = Object.entries(labels);
+    if (entries.length > 512) invalid();
+    for (const [key, label] of entries) {
+      if (!isRemoteWorkspaceId(key)) invalid();
+      text(label, 160);
+    }
+  }
+  if (!Array.isArray(ready.sessions) || ready.sessions.length > 1024) invalid();
   const sessions = ready.sessions.map((item) => parseRemoteBinding(item));
   for (const session of sessions)
     if (session.host_generation !== ready.host_generation) invalid();
   if (ready.pending_approvals !== undefined) {
-    if (!Array.isArray(ready.pending_approvals)) invalid();
+    if (
+      !Array.isArray(ready.pending_approvals) ||
+      ready.pending_approvals.length > 256
+    )
+      invalid();
     const approvals = ready.pending_approvals.map((item) =>
       parseRemotePendingApproval(item),
     );
@@ -164,9 +180,21 @@ export function parseRemoteReady(value: unknown): RemoteReady {
       if (approval.host_generation !== ready.host_generation) invalid();
   }
   if (ready.pending_questions !== undefined) {
-    if (!Array.isArray(ready.pending_questions)) invalid();
-    for (const question of ready.pending_questions)
-      parseRemotePendingQuestion(question);
+    if (
+      !Array.isArray(ready.pending_questions) ||
+      ready.pending_questions.length > 256
+    )
+      invalid();
+    const questions = ready.pending_questions.map((item) =>
+      parseRemotePendingQuestion(item),
+    );
+    if (
+      new Set(questions.map((question) => question.question_id)).size !==
+      questions.length
+    )
+      invalid();
+    for (const question of questions)
+      if (question.host_generation !== ready.host_generation) invalid();
   }
   if (
     ready.attach_running !== undefined &&
@@ -295,7 +323,8 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
       if (typeof command.answer === "string") {
         text(command.answer, 512 * 1024);
       } else if (Array.isArray(command.answer)) {
-        if (command.answer.length === 0) invalid();
+        if (command.answer.length === 0 || command.answer.length > 64)
+          invalid();
         for (const item of command.answer) {
           text(item, 1024);
         }
@@ -377,7 +406,7 @@ export function parseRemotePendingQuestion(
   if (q.multi_select !== undefined && typeof q.multi_select !== "boolean")
     invalid();
   if (q.options !== undefined) {
-    if (!Array.isArray(q.options)) invalid();
+    if (!Array.isArray(q.options) || q.options.length > 64) invalid();
     for (const opt of q.options) {
       const optObj = object(opt);
       only(optObj, ["label", "description", "preview"]);

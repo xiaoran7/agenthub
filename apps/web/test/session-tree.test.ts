@@ -710,3 +710,107 @@ test("getProviderInfo matches legacy sess_* sessions to zcode via sessionPrefixe
   assert.equal(info.name, "ZCode");
   assert.equal(info.badgeClass, "plugin");
 });
+
+test("unfiltered session tree surfaces cross-agent plugin approvals in attentionEntries", () => {
+  const plugins = [
+    {
+      id: "zcode",
+      displayName: "ZCode",
+      sessionPrefix: "zcode_",
+      sessionPrefixes: ["zcode_", "sess_"],
+    },
+  ];
+  const allTree = buildSessionTree({
+    discovered: new Map(),
+    devices: [
+      { runner_id: "dev_a", online: true, hello: { device_name: "主力机" } },
+    ],
+    activeSessions: [
+      active("dev_a", "claude_1", "ws-demo-0123456789abcdef", {
+        execution_state: "idle",
+        title: "Claude 会话",
+      }),
+      active("dev_a", "sess_plugin_42", "ws-demo-0123456789abcdef", {
+        execution_state: "awaiting_permission",
+        title: "插件审批会话",
+      }),
+    ],
+    candidates: [],
+    providerFilter: "all",
+    plugins,
+  });
+
+  const entries = attentionEntries(allTree);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.agentLabel, "ZCode");
+  assert.equal(entries[0]?.title, "插件审批会话");
+});
+
+import {
+  buildLaunchSessionOptions,
+  buildSessionModelOptions,
+} from "../src/components/remote/remote-model-options";
+
+test("buildSessionModelOptions and buildLaunchSessionOptions resolve custom plugins via sessionPrefix", () => {
+  const plugins = [
+    {
+      id: "zcode",
+      displayName: "ZCode",
+      sessionPrefix: "zcode_",
+      sessionPrefixes: ["zcode_", "sess_"],
+    },
+  ];
+  const runner = {
+    runner_id: "dev_a",
+    online: true,
+    revoked: false,
+    hello: {
+      host_generation: "gen-1",
+      workspaces: ["ws-demo"],
+      models: {
+        data: [],
+        agents: {
+          zcode: [{ id: "zcode-pro", display_name: "ZCode Pro" }],
+        },
+      },
+      discovery: {
+        candidates: [
+          {
+            provider_session_id: "sess_legacy_7",
+            workspace_path: "ws-demo",
+            title: "Legacy ZCode",
+          },
+        ],
+      },
+    },
+  };
+  const launchOpts = buildLaunchSessionOptions(runner, "ws-demo", plugins);
+  const candidateOpt = launchOpts[1];
+  assert.ok(candidateOpt && "tag" in candidateOpt);
+  assert.equal(candidateOpt.tag, "ZCode");
+  assert.equal(candidateOpt.tagTone, "plugin");
+
+  const session = {
+    runner_id: "dev_a",
+    online: true,
+    binding: {
+      hub_session_id: "hub-z",
+      provider_session_id: "sess_legacy_7",
+      workspace_path: "ws-demo",
+      host_generation: "gen-1",
+      control_connected: true,
+      execution_state: "idle",
+      current_turn_id: null,
+    },
+  };
+  const modelOpts = buildSessionModelOptions(
+    session,
+    [runner],
+    new Map(),
+    plugins,
+  );
+  assert.deepEqual(
+    modelOpts.map((o) => o.value),
+    ["", "zcode-pro"],
+  );
+});

@@ -1,5 +1,6 @@
 pub mod installer;
 pub mod runtime;
+pub mod security;
 pub mod store;
 pub mod types;
 
@@ -24,8 +25,9 @@ pub use types::{
 
 use self::{
     installer::{
-        fetch_registry_document, has_scheme_prefix, install_from_local_directory,
-        install_from_registry, remove_installed_dir, validate_remote_url,
+        commit_staged_dir, fetch_registry_document, fetch_remote_registry_document,
+        has_scheme_prefix, install_from_local_directory, remove_installed_dir,
+        stage_from_registry_with_policy, validate_trusted_remote_registry_url,
     },
     runtime::{
         cached_plugin_metadata, invalidate_runtime_cache, query_plugin_history,
@@ -69,14 +71,14 @@ impl PluginManager {
         enforce_remote_policy: bool,
     ) -> Result<String, String> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut state = self.store.load_state();
+        let mut state = self.store.load_state_for_write()?;
         let mut cleaned = url
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
         if let Some(u) = cleaned.take() {
             if enforce_remote_policy {
-                let normalized = validate_remote_url(&u, true)?;
+                let normalized = validate_trusted_remote_registry_url(&u)?;
                 cleaned = Some(normalized.to_string());
             } else if has_scheme_prefix(&u, "https://") || has_scheme_prefix(&u, "http://") {
                 let parsed = url::Url::parse(&u).map_err(|_| "invalid_registry_url".to_string())?;
@@ -94,12 +96,27 @@ impl PluginManager {
     }
 
     pub fn refresh_registry(&self) -> Result<(RegistryDocument, String), String> {
+        self.refresh_registry_internal(false)
+    }
+
+    pub fn refresh_remote_registry(&self) -> Result<(RegistryDocument, String), String> {
+        self.refresh_registry_internal(true)
+    }
+
+    fn refresh_registry_internal(
+        &self,
+        enforce_remote_policy: bool,
+    ) -> Result<(RegistryDocument, String), String> {
         let url = {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
             let state = self.store.load_state();
             self.store.effective_registry_url(&state)
         };
-        let doc = fetch_registry_document(&url)?;
+        let doc = if enforce_remote_policy {
+            fetch_remote_registry_document(&url)?
+        } else {
+            fetch_registry_document(&url)?
+        };
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let _ = self.store.save_cached_registry(&url, &doc);
         Ok((doc, url))
@@ -118,6 +135,7 @@ impl PluginManager {
         }
         match fetch_registry_document(&url) {
             Ok(doc) => {
+                let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
                 let _ = self.store.save_cached_registry(&url, &doc);
                 (Some(doc), url, None)
             }
@@ -329,17 +347,32 @@ impl PluginManager {
         source_url: Option<&str>,
         enable_after: bool,
     ) -> Result<InstalledPluginRecord, String> {
+        self.install_plugin_internal(plugin_id, source_url, enable_after, false)
+    }
+
+    fn install_plugin_internal(
+        &self,
+        plugin_id: &str,
+        source_url: Option<&str>,
+        enable_after: bool,
+        enforce_remote_policy: bool,
+    ) -> Result<InstalledPluginRecord, String> {
         if let Some(src) = source_url.map(str::trim).filter(|s| !s.is_empty()) {
+            if enforce_remote_policy {
+                return Err("remote_source_url_unsupported".into());
+            }
             let expected_id = (!plugin_id.trim().is_empty()).then_some(plugin_id.trim());
-            let record = install_from_local_directory(&self.store, src, expected_id, enable_after)?;
-            {
+            let record = {
                 let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-                let mut state = self.store.load_state();
+                let mut state = self.store.load_state_for_write()?;
+                let record =
+                    install_from_local_directory(&self.store, src, expected_id, enable_after)?;
                 state.installed.insert(record.id.clone(), record.clone());
                 self.store.save_state(&state)?;
                 invalidate_runtime_cache(Some(&record.id));
                 bump_state_generation();
-            }
+                record
+            };
             if enable_after {
                 let _ = query_plugin_metadata(&record);
             }
@@ -348,23 +381,39 @@ impl PluginManager {
 
         validate_plugin_id(plugin_id)?;
         let reg_url = self.registry_url();
-        let doc = fetch_registry_document(&reg_url)?;
-        let _ = self.store.save_cached_registry(&reg_url, &doc);
+        let doc = if enforce_remote_policy {
+            fetch_remote_registry_document(&reg_url)?
+        } else {
+            fetch_registry_document(&reg_url)?
+        };
+        {
+            let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = self.store.save_cached_registry(&reg_url, &doc);
+        }
         let entry = doc
             .plugins
             .iter()
             .find(|p| p.id == plugin_id)
             .ok_or_else(|| format!("plugin_not_found_in_registry:{plugin_id}"))?;
-        let record = install_from_registry(&self.store, &reg_url, entry, enable_after)?;
+        let (staging, manifest) =
+            stage_from_registry_with_policy(&self.store, &reg_url, entry, enforce_remote_policy)?;
 
-        {
+        let record = {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            let mut state = self.store.load_state();
+            let mut state = self.store.load_state_for_write()?;
+            let record = commit_staged_dir(
+                &self.store,
+                staging.keep(),
+                &manifest,
+                Some(&reg_url),
+                enable_after,
+            )?;
             state.installed.insert(record.id.clone(), record.clone());
             self.store.save_state(&state)?;
             invalidate_runtime_cache(Some(&record.id));
             bump_state_generation();
-        }
+            record
+        };
         if enable_after {
             let _ = query_plugin_metadata(&record);
         }
@@ -379,7 +428,7 @@ impl PluginManager {
         validate_plugin_id(plugin_id)?;
         let out = {
             let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            let mut state = self.store.load_state();
+            let mut state = self.store.load_state_for_write()?;
             let rec = state
                 .installed
                 .get_mut(plugin_id)
@@ -406,14 +455,12 @@ impl PluginManager {
 
     pub fn uninstall_plugin(&self, plugin_id: &str) -> Result<(), String> {
         validate_plugin_id(plugin_id)?;
-        {
-            let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            let mut state = self.store.load_state();
-            state.installed.remove(plugin_id);
-            self.store.save_state(&state)?;
-            invalidate_runtime_cache(Some(plugin_id));
-            bump_state_generation();
-        }
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.store.load_state_for_write()?;
+        state.installed.remove(plugin_id);
+        self.store.save_state(&state)?;
+        invalidate_runtime_cache(Some(plugin_id));
+        bump_state_generation();
         remove_installed_dir(&self.store, plugin_id)?;
         Ok(())
     }
@@ -427,7 +474,7 @@ impl PluginManager {
             "list" => {}
             "catalog" | "refresh_catalog" => {
                 fetch_catalog = true;
-                match self.refresh_registry() {
+                match self.refresh_remote_registry() {
                     Ok((doc, _)) => refreshed_doc = Some(doc),
                     Err(e) => err = Some(e),
                 }
@@ -437,7 +484,7 @@ impl PluginManager {
                 if let Err(e) = self.set_remote_registry_url(cmd.registry_url.as_deref()) {
                     err = Some(e);
                 } else {
-                    match self.refresh_registry() {
+                    match self.refresh_remote_registry() {
                         Ok((doc, _)) => refreshed_doc = Some(doc),
                         Err(e) => err = Some(e),
                     }
@@ -453,7 +500,7 @@ impl PluginManager {
                 } else {
                     let pid = cmd.plugin_id.as_deref().unwrap_or("");
                     probe_live = true;
-                    if let Err(e) = self.install_plugin(pid, None, true) {
+                    if let Err(e) = self.install_plugin_internal(pid, None, true, true) {
                         err = Some(e);
                     }
                 }

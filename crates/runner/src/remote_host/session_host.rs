@@ -10,7 +10,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     pub(crate) native_to_hub: HashMap<String, String>,
     pub(crate) newly_created: HashSet<String>,
     pub(crate) control_idle_since: HashMap<String, Instant>,
-    pub(crate) control_release_checks: HashMap<String, Instant>,
+    pub(crate) control_release_checks: HashMap<String, (Instant, u8, Instant)>,
     pub(crate) approvals: HashMap<String, PendingApproval>,
     pub(crate) questions: HashMap<String, PendingQuestion>,
     /// Requests this Host already answered, keyed by their derived id. Some
@@ -27,6 +27,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     /// rejects every new command on a long-lived daemon.
     pub(crate) receipt_order: VecDeque<String>,
     pub(crate) pending_historical_events: VecDeque<HostEvent>,
+    pub(crate) live_mirror: LiveTranscriptMirror,
     pub(crate) alive: bool,
 }
 
@@ -64,6 +65,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             receipts: HashMap::new(),
             receipt_order: VecDeque::new(),
             pending_historical_events: VecDeque::new(),
+            live_mirror: LiveTranscriptMirror::default(),
             alive: true,
         })
     }
@@ -216,23 +218,20 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         let Some(home) = crate::collectors::home_dir() else {
             return;
         };
-        let provider = if id.starts_with("claude_") {
-            AgentType::ClaudeCode
-        } else if id.starts_with("antigravity_") {
-            AgentType::Antigravity
-        } else if let Some(plugin) = crate::plugins::find_enabled_plugin_for_session(id) {
-            AgentType::Plugin(plugin.id)
-        } else {
-            AgentType::Codex
-        };
+        let provider = provider_for_session_id(id);
+        let usage =
+            crate::collectors::lookup_session_context_usage(&home, provider.clone(), id, Some(cwd));
+        let usage_pair = usage.as_ref().map(|u| (u.used, u.window));
 
         if !replayed_turn_items {
             let items = crate::conversation::load_session_conversation_with_workspace(
                 &home,
-                provider.clone(),
+                provider,
                 id,
                 Some(cwd),
             );
+            self.live_mirror
+                .seed_from_items(hub_id, &items, usage_pair, Instant::now());
             if !items.is_empty() {
                 self.pending_historical_events.push_back(HostEvent {
                     event_id: uuid::Uuid::new_v4().to_string(),
@@ -248,11 +247,12 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     question: None,
                 });
             }
+        } else {
+            self.live_mirror
+                .defer_after_local_turn(hub_id, Instant::now());
         }
 
-        if let Some(usage) =
-            crate::collectors::lookup_session_context_usage(&home, provider, id, Some(cwd))
-        {
+        if let Some(usage) = usage {
             self.pending_historical_events.push_back(HostEvent {
                 event_id: uuid::Uuid::new_v4().to_string(),
                 host_generation: self.generation.clone(),
@@ -428,7 +428,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 let tt = thread
                     .get("total_tokens")
                     .and_then(Value::as_u64)
-                    .unwrap_or(pt + ct);
+                    .unwrap_or_else(|| pt.saturating_add(ct));
                 let cr = thread
                     .get("cache_read_tokens")
                     .and_then(Value::as_u64)

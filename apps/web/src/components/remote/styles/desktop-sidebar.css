@@ -1,0 +1,616 @@
+/* The active Web console follows the Claude Design System tokens from :root. */
+.remote-console,
+.remote-launch {
+  /* Reading measure is the product's core typographic decision */
+  --remote-measure: 760px;
+  --remote-wide: 900px;
+  font-family: var(--font-sans);
+}
+.remote-console {
+  background: var(--remote-bg);
+  color: var(--remote-ink);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+.remote-console
+  :where(
+    button:not(
+      .remote-workspace-title-btn,
+      .remote-workspace-quick-add,
+      .remote-workspace-more-btn,
+      .remote-session-main,
+      .remote-session-action-btn,
+      .remote-header-icon-btn,
+      .cds-select-trigger,
+      .cds-select-option,
+      .remote-primary,
+      .cds-confirm-btn,
+      .remote-msg-copy-btn,
+      .remote-queued-prompt-btn,
+      .remote-queue-btn,
+      .remote-header-copy-id,
+      .remote-mobile-attention-btn,
+      .cds-select-sheet-close,
+      [aria-label="关闭提示"],
+      .settings-page *
+    )
+  ),
+.remote-launch
+  :where(
+    button:not(
+      .remote-modal-close,
+      .remote-primary,
+      .cds-select-trigger,
+      .cds-select-option
+    )
+  ) {
+  background: var(--remote-surface);
+  border-color: var(--remote-line);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--remote-ink);
+  transition: all 0.12s ease;
+}
+.remote-console
+  :where(
+    button:not(
+      .remote-workspace-title-btn,
+      .remote-workspace-quick-add,
+      .remote-workspace-more-btn,
+      .remote-session-main,
+      .remote-session-action-btn,
+      .remote-header-icon-btn,
+      .cds-select-trigger,
+      .cds-select-option,
+      .remote-primary,
+      .cds-confirm-btn,
+      .remote-msg-copy-btn,
+      .remote-queued-prompt-btn,
+      .remote-queue-btn,
+      .remote-header-copy-id,
+      .remote-mobile-attention-btn,
+      .cds-select-sheet-close,
+      [aria-label="关闭提示"],
+      .settings-page *
+    )
+  ):hover:not(:disabled),
+.remote-launch
+  :where(
+    button:not(
+      .remote-modal-close,
+      .remote-primary,
+      .cds-select-trigger,
+      .cds-select-option
+    )
+  ):hover:not(:disabled) {
+  background: var(--remote-hover);
+  border-color: var(--remote-line-strong);
+}
+.remote-console button:focus-visible,
+.remote-console select:focus-visible,
+.remote-console textarea:focus-visible,
+.remote-launch button:focus-visible,
+.remote-launch select:focus-visible,
+.remote-launch input:focus-visible {
+  outline: 2px solid var(--remote-terracotta);
+  outline-offset: 2px;
+}
+.remote-sidebar {
+  background: var(--remote-sidebar);
+  border-right-color: var(--remote-line);
+  padding: 16px 12px 14px;
+}
+.remote-sidebar-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  margin: 0 2px 14px 2px !important;
+}
+.remote-brand {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-family: var(--font-serif) !important;
+  font-size: 19px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.025em !important;
+  color: var(--remote-ink) !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+}
+.remote-brand span {
+  display: inline-flex !important;
+  align-items: center !important;
+  border-color: var(--remote-line) !important;
+  color: var(--remote-muted) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  line-height: 1 !important;
+  letter-spacing: 0.04em !important;
+  padding: 1px 6px !important;
+  border-radius: 999px !important;
+}
+.remote-header-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+.remote-header-icon-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  max-width: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  border-radius: var(--radius-md, 6px) !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--remote-muted, #71717a) !important;
+  cursor: pointer !important;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  user-select: none !important;
+  box-shadow: none !important;
+  box-sizing: border-box !important;
+}
+.remote-header-icon-btn svg {
+  width: 15px !important;
+  height: 15px !important;
+  min-width: 15px !important;
+  min-height: 15px !important;
+  max-width: 15px !important;
+  max-height: 15px !important;
+  display: block !important;
+  flex-shrink: 0 !important;
+  stroke: currentColor !important;
+  fill: none !important;
+}
+.remote-header-icon-btn:hover {
+  background: var(--remote-hover, rgba(0, 0, 0, 0.05)) !important;
+  color: var(--remote-ink, #18181b) !important;
+  border-color: var(--remote-line, rgba(0, 0, 0, 0.1)) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+.remote-header-icon-btn:active {
+  transform: scale(0.95) !important;
+  background: var(--remote-selected, rgba(0, 0, 0, 0.08)) !important;
+}
+.remote-header-icon-btn.active {
+  background: var(--remote-hover, rgba(0, 0, 0, 0.06)) !important;
+  border-color: var(--remote-line-strong, rgba(0, 0, 0, 0.16)) !important;
+  color: var(--remote-ink, #18181b) !important;
+}
+/* ================= 双按钮级联选择器栏 (Dual Cascading Selectors Bar) ================= */
+.remote-selectors-bar {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 6px !important;
+  width: 100% !important;
+  margin: 0 0 12px 0 !important;
+  box-sizing: border-box !important;
+}
+.remote-selector-dropdown {
+  position: relative !important;
+  min-width: 0 !important;
+  width: 100% !important;
+}
+.remote-selector-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  height: 35px !important;
+  min-height: 35px !important;
+  max-height: 35px !important;
+  padding: 0 11px !important;
+  border-radius: var(--radius-lg, 10px) !important;
+  border: 1px solid var(--remote-line, rgba(0, 0, 0, 0.1)) !important;
+  background: var(--remote-surface, #ffffff) !important;
+  color: var(--remote-ink, #18181b) !important;
+  cursor: pointer !important;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  box-sizing: border-box !important;
+  user-select: none !important;
+  outline: none !important;
+}
+.remote-selector-btn:hover:not(:disabled) {
+  background: var(--remote-hover, rgba(0, 0, 0, 0.04)) !important;
+  border-color: var(--remote-line-strong, rgba(0, 0, 0, 0.18)) !important;
+}
+.remote-selector-btn.active:not(:disabled) {
+  background: var(--remote-surface, #ffffff) !important;
+  border-color: var(--remote-terracotta, #d97757) !important;
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.15) !important;
+}
+.remote-selector-btn:disabled,
+.remote-selector-btn.disabled {
+  opacity: 0.55 !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
+  background: var(--remote-surface, #ffffff) !important;
+  border-color: var(--remote-line, rgba(0, 0, 0, 0.1)) !important;
+}
+.remote-selector-btn-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+.remote-selector-btn-icon {
+  color: var(--remote-muted, #71717a) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  width: 15px !important;
+  height: 15px !important;
+}
+.remote-selector-btn-text {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: var(--remote-ink, #18181b) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  text-align: left !important;
+  line-height: 1.2 !important;
+}
+.remote-selector-btn-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-shrink: 0 !important;
+  margin-left: 4px !important;
+}
+.remote-selector-count-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  padding: 0 5px !important;
+  border-radius: 999px !important;
+  background: rgba(217, 119, 87, 0.12) !important;
+  color: var(--remote-terracotta, #d97757) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  font-family: var(--font-mono) !important;
+  line-height: 1 !important;
+}
+.remote-selector-arrow {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--remote-muted, #71717a) !important;
+  transition: transform 0.18s ease !important;
+  flex-shrink: 0 !important;
+}
+.remote-selector-arrow.open {
+  transform: rotate(180deg) !important;
+}
+.remote-selector-popover {
+  position: absolute !important;
+  top: calc(100% + 6px) !important;
+  z-index: 100 !important;
+  background: var(--remote-surface, #ffffff) !important;
+  border: 1px solid var(--remote-line, rgba(0, 0, 0, 0.1)) !important;
+  border-radius: 12px !important;
+  padding: 6px !important;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.12),
+    0 3px 8px rgba(0, 0, 0, 0.05) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-sizing: border-box !important;
+  animation: remotePopoverFade 0.14s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.remote-device-popover,
+.remote-agent-popover {
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+}
+.remote-popover-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 6px 10px 7px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  color: var(--remote-muted, #71717a) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  border-bottom: 1px solid var(--remote-line, rgba(0, 0, 0, 0.06)) !important;
+  margin-bottom: 4px !important;
+}
+.remote-popover-sub {
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  text-transform: none !important;
+  color: var(--remote-muted, #71717a) !important;
+  max-width: 120px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.remote-popover-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  max-height: 240px !important;
+  overflow-y: auto !important;
+}
+.remote-popover-empty {
+  padding: 14px 10px !important;
+  font-size: 12.5px !important;
+  color: var(--remote-muted, #71717a) !important;
+  text-align: center !important;
+}
+.remote-popover-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 10px !important;
+  margin: 0 !important;
+  border-radius: 8px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--remote-ink, #18181b) !important;
+  font-size: 13px !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  transition: all 0.12s ease !important;
+  box-sizing: border-box !important;
+}
+.remote-popover-item:hover {
+  background: var(--remote-hover, rgba(0, 0, 0, 0.04)) !important;
+  border-color: transparent !important;
+}
+.remote-popover-item.selected {
+  background: rgba(217, 119, 87, 0.08) !important;
+  border-color: rgba(217, 119, 87, 0.2) !important;
+  color: var(--remote-terracotta, #d97757) !important;
+  font-weight: 600 !important;
+}
+.remote-popover-item-name {
+  flex: 1 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  font-size: 13px !important;
+}
+.remote-popover-item-badge {
+  font-size: 11px !important;
+  padding: 1.5px 7px !important;
+  border-radius: 999px !important;
+  background: rgba(0, 0, 0, 0.05) !important;
+  color: var(--remote-muted, #71717a) !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+}
+.remote-popover-item-badge.active-count {
+  background: rgba(217, 119, 87, 0.12) !important;
+  color: var(--remote-terracotta, #d97757) !important;
+  font-weight: 700 !important;
+}
+.remote-popover-check {
+  color: var(--remote-terracotta, #d97757) !important;
+  margin-left: 2px !important;
+  flex-shrink: 0 !important;
+}
+.remote-icon-btn {
+  color: var(--remote-muted) !important;
+  border-radius: 8px !important;
+  transition: all 0.15s ease !important;
+}
+.remote-icon-btn:hover,
+.remote-icon-btn.expand-btn {
+  background: var(--remote-hover) !important;
+  border-color: var(--remote-line) !important;
+  color: var(--remote-ink) !important;
+}
+.remote-sidebar .remote-primary {
+  min-height: 42px;
+  background: var(--remote-terracotta);
+  color: #ffffff;
+  border-radius: var(--radius-xl, 12px);
+  border: 0;
+  font-weight: 600;
+  font-size: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.remote-sidebar .remote-primary:hover:not(:disabled) {
+  background: var(--remote-terracotta-hover);
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(217, 119, 87, 0.3);
+}
+.remote-sidebar .remote-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.remote-session-tree {
+  gap: 6px;
+  margin-right: 0;
+  padding-right: 3px;
+  padding-bottom: 12px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+.remote-session-tree::-webkit-scrollbar {
+  width: 5px;
+}
+.remote-session-tree::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.remote-session-tree::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+.remote-workspace-name {
+  color: var(--cds-text-primary, var(--remote-ink));
+  font-size: 13.5px;
+  font-weight: 620;
+}
+.remote-workspace-icon {
+  color: var(--remote-muted);
+  flex: 0 0 auto;
+}
+.remote-workspace-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-sidebar .remote-session {
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
+  margin: 2px 0;
+  padding: 8px 10px;
+  min-height: 52px;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.remote-sidebar .remote-session:hover {
+  background: var(--remote-hover);
+  border-color: transparent;
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+.remote-sidebar .remote-session:active {
+  transform: scale(0.99);
+}
+.remote-sidebar .remote-session.selected {
+  background: var(--remote-selected);
+  transform: none;
+}
+.remote-session-title {
+  color: var(--cds-text-primary, var(--remote-ink));
+  font-size: 14px;
+  font-weight: 550;
+}
+.remote-session.selected .remote-session-title {
+  font-weight: 650;
+}
+.remote-session small,
+.remote-tree-empty,
+.remote-sidebar-footer,
+.remote-runner-status,
+.remote-account-name {
+  color: var(--remote-muted);
+  font-size: 12.5px;
+}
+.remote-session-badge {
+  color: var(--remote-green);
+  background: #243b2e;
+  border-radius: 5px;
+}
+.remote-sidebar-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--remote-line);
+  padding: 12px 6px 0;
+  gap: 10px;
+}
+.remote-main {
+  background: var(--remote-bg);
+}
+.remote-main > header {
+  min-height: 54px;
+  padding: 8px 24px;
+  border-bottom-color: var(--remote-line);
+}
+.remote-main h1 {
+  font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  color: var(--remote-ink);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.remote-main header p {
+  color: var(--remote-muted);
+}
+.remote-welcome {
+  width: min(100%, 790px);
+  max-width: none;
+  padding: 36px 30px;
+}
+.remote-eyebrow {
+  color: var(--remote-amber);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.remote-welcome h2 {
+  max-width: 690px;
+  margin: 18px 0 12px;
+  font-family: var(--font-serif);
+  font-size: clamp(30px, 3.2vw, 42px);
+  font-weight: 600;
+  line-height: 1.22;
+  letter-spacing: -0.025em;
+  color: var(--remote-ink);
+}
+.remote-welcome p {
+  max-width: 590px;
+  color: var(--remote-secondary);
+  line-height: 1.72;
+}
+.remote-welcome-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+.remote-welcome-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 13px 15px;
+  text-align: left;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
+  border-radius: var(--radius-md, 10px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.remote-welcome-chip:hover {
+  border-color: var(--remote-line-strong);
+  background: var(--remote-hover);
+  transform: translateY(-1px);
+}
+.remote-welcome-chip strong {
+  font-size: 13.5px;
+  color: var(--remote-ink);
+  font-weight: 600;
+}
+.remote-welcome-chip span {
+  font-size: 12px;
+  color: var(--remote-secondary);
+  line-height: 1.45;
+}
+.remote-timeline {
+  padding: 26px 32px 20px;
+  display: flex;
+  flex-direction: column;
+  scrollbar-gutter: stable both-edges;
+}
+.remote-notice {
+  width: min(var(--remote-measure), calc(100% - 64px));
+  max-width: var(--remote-measure);
+  margin: 14px auto 0;
+  box-sizing: border-box;
+}

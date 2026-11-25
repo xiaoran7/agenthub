@@ -11,10 +11,17 @@ import type {
 } from "@agent-pulse/contracts";
 import type { PushSubscription } from "./push.js";
 import {
-  SQLITE_GATEWAY_SCHEMA,
-  sessionStatusChange,
-  shouldReplaceSnapshot,
-} from "./store-schemas.js";
+  deleteSqlitePushSubscription,
+  deleteSqlitePushSubscriptionsForSubscriber,
+  initSqliteGatewayTables,
+  listSqliteAuth,
+  listSqliteDevices,
+  listSqlitePushSubscriptions,
+  pruneSqliteExpiredData,
+  runSqliteGatewayTransaction,
+  saveSqlitePushSubscription,
+} from "./sqlite-store-helpers.js";
+import { sessionStatusChange, shouldReplaceSnapshot } from "./store-schemas.js";
 import {
   GatewayStoreError,
   type AuthFilters,
@@ -29,6 +36,7 @@ import {
   type SessionFilters,
   type SessionStatusChange,
   type StoredAuthSnapshot,
+  type StoredPushSubscription,
   type StoredSession,
 } from "./store.js";
 import type { AccountStore } from "./accounts.js";
@@ -55,39 +63,18 @@ export class SqliteGatewayStore implements GatewayStore {
   }
 
   private transaction<T>(work: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const res = work();
-      this.db.exec("COMMIT");
-      return res;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    return runSqliteGatewayTransaction(this.db, work);
   }
 
   private initTables(): void {
-    this.db.exec(SQLITE_GATEWAY_SCHEMA);
-    const cols = this.db
-      .prepare("PRAGMA table_info(registered_devices)")
-      .all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === "last_sequence")) {
-      this.db.exec(
-        "ALTER TABLE registered_devices ADD COLUMN last_sequence INTEGER NOT NULL DEFAULT 0",
-      );
-    }
-    if (!cols.some((c) => c.name === "last_heartbeat_at")) {
-      this.db.exec(
-        "ALTER TABLE registered_devices ADD COLUMN last_heartbeat_at TEXT",
-      );
-    }
+    initSqliteGatewayTables(this.db);
   }
 
   setAuditRecorder?(_recorder: Pick<AccountStore, "recordAuditEvent">): void {}
 
-  async getRegisteredDevice(
+  private getRegisteredDeviceSync(
     deviceId: string,
-  ): Promise<RegisteredDevice | undefined> {
+  ): RegisteredDevice | undefined {
     const row = this.db
       .prepare("SELECT * FROM registered_devices WHERE device_id = ?")
       .get(deviceId) as
@@ -109,6 +96,12 @@ export class SqliteGatewayStore implements GatewayStore {
       last_seen_at: row.last_seen_at,
       ...(row.revoked_at ? { revoked_at: row.revoked_at } : {}),
     };
+  }
+
+  async getRegisteredDevice(
+    deviceId: string,
+  ): Promise<RegisteredDevice | undefined> {
+    return this.getRegisteredDeviceSync(deviceId);
   }
 
   async getRegisteredDevices(
@@ -177,68 +170,59 @@ export class SqliteGatewayStore implements GatewayStore {
     deviceId: string,
     publicKey: string,
   ): Promise<DeviceRegistrationResult> {
-    const binding = this.db
-      .prepare("SELECT * FROM binding_codes WHERE code_digest = ?")
-      .get(codeDigest) as
-      | {
-          code_digest: string;
-          owner_id: string;
-          expires_at: string;
-          claimed_device_id: string | null;
-          issued_by: string | null;
-        }
-      | undefined;
+    return this.transaction(() => {
+      const binding = this.db
+        .prepare("SELECT * FROM binding_codes WHERE code_digest = ?")
+        .get(codeDigest) as
+        | {
+            code_digest: string;
+            owner_id: string;
+            expires_at: string;
+            claimed_device_id: string | null;
+            issued_by: string | null;
+          }
+        | undefined;
 
-    if (!binding) {
-      throw new GatewayStoreError(
-        "invalid_binding_code",
-        "binding code is invalid or expired",
-      );
-    }
-    if (binding.claimed_device_id !== null) {
-      if (binding.claimed_device_id !== deviceId) {
+      if (!binding) {
         throw new GatewayStoreError(
-          "binding_code_used",
-          "binding code has already been used",
+          "invalid_binding_code",
+          "binding code is invalid or expired",
         );
       }
-      return this.registerDevice(
-        binding.owner_id,
-        deviceId,
-        publicKey,
-        binding.issued_by ?? undefined,
-        false,
-      );
-    }
-    if (Date.parse(binding.expires_at) <= this.now().getTime()) {
-      throw new GatewayStoreError(
-        "invalid_binding_code",
-        "binding code is invalid or expired",
-      );
-    }
+      if (binding.claimed_device_id !== null) {
+        if (binding.claimed_device_id !== deviceId) {
+          throw new GatewayStoreError(
+            "binding_code_used",
+            "binding code has already been used",
+          );
+        }
+        return this.registerDeviceSync(
+          binding.owner_id,
+          deviceId,
+          publicKey,
+          false,
+        );
+      }
+      if (Date.parse(binding.expires_at) <= this.now().getTime()) {
+        throw new GatewayStoreError(
+          "invalid_binding_code",
+          "binding code is invalid or expired",
+        );
+      }
 
-    this.db
-      .prepare(
-        "UPDATE binding_codes SET claimed_device_id = ? WHERE code_digest = ?",
-      )
-      .run(deviceId, codeDigest);
-
-    try {
-      return await this.registerDevice(
-        binding.owner_id,
-        deviceId,
-        publicKey,
-        binding.issued_by ?? undefined,
-        true,
-      );
-    } catch (err) {
       this.db
         .prepare(
-          "UPDATE binding_codes SET claimed_device_id = NULL WHERE code_digest = ?",
+          "UPDATE binding_codes SET claimed_device_id = ? WHERE code_digest = ?",
         )
-        .run(codeDigest);
-      throw err;
-    }
+        .run(deviceId, codeDigest);
+
+      return this.registerDeviceSync(
+        binding.owner_id,
+        deviceId,
+        publicKey,
+        true,
+      );
+    });
   }
 
   async revokeDevice(
@@ -266,30 +250,40 @@ export class SqliteGatewayStore implements GatewayStore {
   async savePushSubscription(
     ownerId: string,
     subscription: PushSubscription,
+    subscriberUserId?: string,
   ): Promise<void> {
-    this.db
-      .prepare(
-        "INSERT INTO push_subscriptions (endpoint, owner_id, payload) VALUES (?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET owner_id = excluded.owner_id, payload = excluded.payload",
-      )
-      .run(subscription.endpoint, ownerId, JSON.stringify(subscription));
+    saveSqlitePushSubscription(
+      this.db,
+      ownerId,
+      subscription,
+      subscriberUserId,
+    );
   }
 
   async deletePushSubscription(
     ownerId: string,
     endpoint: string,
+    subscriberUserId?: string,
   ): Promise<void> {
-    this.db
-      .prepare(
-        "DELETE FROM push_subscriptions WHERE endpoint = ? AND owner_id = ?",
-      )
-      .run(endpoint, ownerId);
+    deleteSqlitePushSubscription(this.db, ownerId, endpoint, subscriberUserId);
   }
 
-  async listPushSubscriptions(ownerId: string): Promise<PushSubscription[]> {
-    const rows = this.db
-      .prepare("SELECT payload FROM push_subscriptions WHERE owner_id = ?")
-      .all(ownerId) as Array<{ payload: string }>;
-    return rows.map((r) => JSON.parse(r.payload) as PushSubscription);
+  async deletePushSubscriptionsForSubscriber(
+    ownerId: string,
+    subscriberUserId: string,
+  ): Promise<void> {
+    deleteSqlitePushSubscriptionsForSubscriber(
+      this.db,
+      ownerId,
+      subscriberUserId,
+    );
+  }
+
+  async listPushSubscriptions(
+    ownerId: string,
+    subscriberUserId?: string,
+  ): Promise<StoredPushSubscription[]> {
+    return listSqlitePushSubscriptions(this.db, ownerId, subscriberUserId);
   }
 
   async countActiveDevices(ownerId: string): Promise<number> {
@@ -314,33 +308,16 @@ export class SqliteGatewayStore implements GatewayStore {
   }
 
   async pruneExpiredData(nowIso: string, historyDays = 90): Promise<void> {
-    const cutoff = new Date(
-      Date.parse(nowIso) - historyDays * 86_400_000,
-    ).toISOString();
-    this.db
-      .prepare(
-        "DELETE FROM binding_codes WHERE expires_at <= ? AND claimed_device_id IS NULL",
-      )
-      .run(nowIso);
-    this.db
-      .prepare(
-        `DELETE FROM sync_events WHERE rowid IN (
-          SELECT e.rowid FROM sync_events e
-          JOIN registered_devices d ON d.device_id = e.device_id
-          WHERE e.sequence < d.last_sequence AND e.observed_at < ?
-        )`,
-      )
-      .run(cutoff);
+    pruneSqliteExpiredData(this.db, nowIso, historyDays);
   }
 
-  async registerDevice(
+  private registerDeviceSync(
     ownerId: string,
     deviceId: string,
     publicKey: string,
-    _actorUserId?: string,
     allowReactivate = false,
-  ): Promise<DeviceRegistrationResult> {
-    const existing = await this.getRegisteredDevice(deviceId);
+  ): DeviceRegistrationResult {
+    const existing = this.getRegisteredDeviceSync(deviceId);
     if (existing !== undefined) {
       if (existing.public_key !== publicKey || existing.owner_id !== ownerId) {
         throw new GatewayStoreError(
@@ -375,6 +352,18 @@ export class SqliteGatewayStore implements GatewayStore {
       )
       .run(deviceId, publicKey, ownerId, nowIso, nowIso);
     return { device, created: true };
+  }
+
+  async registerDevice(
+    ownerId: string,
+    deviceId: string,
+    publicKey: string,
+    _actorUserId?: string,
+    allowReactivate = false,
+  ): Promise<DeviceRegistrationResult> {
+    return this.transaction(() =>
+      this.registerDeviceSync(ownerId, deviceId, publicKey, allowReactivate),
+    );
   }
 
   async ingestBatch(batch: SyncBatch): Promise<IngestResult> {
@@ -413,7 +402,7 @@ export class SqliteGatewayStore implements GatewayStore {
         if (byId) {
           if (!isDeepStrictEqual(JSON.parse(byId.event_data), event)) {
             throw new GatewayStoreError(
-              "event_id_conflict",
+              "event_conflict",
               "event_id was reused for different content",
             );
           }
@@ -477,11 +466,14 @@ export class SqliteGatewayStore implements GatewayStore {
       let nextSeq = device.last_sequence;
       for (const event of newEvents) {
         const rawEvent = JSON.stringify(event);
+        const observedAtUtc = new Date(
+          Date.parse(event.observed_at),
+        ).toISOString();
         insertEvent.run(
           event.event_id,
           event.device_id,
           event.sequence,
-          event.observed_at,
+          observedAtUtc,
           receivedAt,
           rawEvent,
         );
@@ -504,7 +496,7 @@ export class SqliteGatewayStore implements GatewayStore {
             event.device_id,
             event.agent_type,
             event.agent_session_id,
-            event.observed_at,
+            observedAtUtc,
             receivedAt,
             event.sequence,
             event.confidence,
@@ -589,10 +581,13 @@ export class SqliteGatewayStore implements GatewayStore {
             continue;
           }
         }
+        const checkedAtUtc = new Date(
+          Date.parse(snapshot.checked_at),
+        ).toISOString();
         upsertSnap.run(
           batch.device_id,
           snapshot.provider,
-          snapshot.checked_at,
+          checkedAtUtc,
           receivedAt,
           JSON.stringify(snapshot),
         );
@@ -648,40 +643,24 @@ export class SqliteGatewayStore implements GatewayStore {
         "heartbeat public key does not match registered device",
       );
     }
+    const sentAtMs = Date.parse(heartbeat.sent_at);
+    const normalizedSentAt = new Date(sentAtMs).toISOString();
     const accepted =
       device.last_heartbeat_at === null ||
-      heartbeat.sent_at > device.last_heartbeat_at;
+      sentAtMs > Date.parse(device.last_heartbeat_at);
     const seenAt = accepted ? receivedAt : device.last_seen_at;
     if (accepted) {
       this.db
         .prepare(
           "UPDATE registered_devices SET last_seen_at = ?, last_heartbeat_at = ? WHERE device_id = ?",
         )
-        .run(receivedAt, heartbeat.sent_at, heartbeat.device_id);
+        .run(receivedAt, normalizedSentAt, heartbeat.device_id);
     }
     return { accepted, owner_id: device.owner_id, last_seen_at: seenAt };
   }
 
   async listDevices(ownerId: string): Promise<DeviceView[]> {
-    const rows = this.db
-      .prepare(
-        "SELECT device_id, created_at, last_seen_at, revoked_at FROM registered_devices WHERE owner_id = ? ORDER BY device_id ASC",
-      )
-      .all(ownerId) as Array<{
-      device_id: string;
-      created_at: string;
-      last_seen_at: string;
-      revoked_at: string | null;
-    }>;
-    const offlineBefore = this.now().getTime() - 45_000;
-    return rows.map((r) => ({
-      device_id: r.device_id,
-      created_at: r.created_at,
-      last_seen_at: r.last_seen_at,
-      online:
-        r.revoked_at === null && Date.parse(r.last_seen_at) >= offlineBefore,
-      revoked: r.revoked_at !== null,
-    }));
+    return listSqliteDevices(this.db, ownerId, this.now().getTime());
   }
 
   async listSessions(
@@ -750,28 +729,6 @@ export class SqliteGatewayStore implements GatewayStore {
     ownerId: string,
     filters: AuthFilters,
   ): Promise<StoredAuthSnapshot[]> {
-    const rows = this.db
-      .prepare(
-        `SELECT a.device_id, a.received_at, a.snapshot_data
-         FROM auth_snapshots a
-         JOIN registered_devices d ON d.device_id = a.device_id
-         WHERE d.owner_id = ?
-           AND (? IS NULL OR a.device_id = ?)
-         ORDER BY a.checked_at DESC, a.provider ASC`,
-      )
-      .all(
-        ownerId,
-        filters.device_id ?? null,
-        filters.device_id ?? null,
-      ) as Array<{
-      device_id: string;
-      received_at: string;
-      snapshot_data: string;
-    }>;
-    return rows.map((r) => ({
-      ...JSON.parse(r.snapshot_data),
-      device_id: r.device_id,
-      received_at: r.received_at,
-    }));
+    return listSqliteAuth(this.db, ownerId, filters);
   }
 }

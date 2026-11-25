@@ -3,6 +3,8 @@ package com.agentplatform.mobile.ui
 import com.agentplatform.mobile.data.RemoteCommandRecord
 import com.agentplatform.mobile.data.RemoteEvent
 import com.agentplatform.mobile.data.objects
+import com.agentplatform.mobile.data.optNullableString
+import com.agentplatform.mobile.data.optStringOrEmpty
 import com.agentplatform.mobile.data.paramsOf
 import org.json.JSONObject
 
@@ -32,6 +34,8 @@ data class TranscriptItem(
     val streaming: Boolean = false,
     /** True when the item came from the bounded history snapshot. */
     val history: Boolean = false,
+    /** The row key survives reconciliation from a provisional tool ID to the provider's ID. */
+    internal val displayKey: String = "item:$id",
 )
 
 /** One failed turn, with the reason the Runner was allowed to forward. */
@@ -57,33 +61,33 @@ internal fun toolLabel(server: String?, name: String?): String =
 
 internal fun itemState(item: JSONObject, completed: Boolean): ToolState =
     when {
-        item.optString("status") == "failed" -> ToolState.FAILED
+        item.optStringOrEmpty("status") == "failed" -> ToolState.FAILED
         completed -> ToolState.COMPLETED
         else -> ToolState.RUNNING
     }
 
 internal fun textOf(item: JSONObject): String =
-    item.optString("text").ifBlank {
+    item.optStringOrEmpty("text").ifBlank {
         item.optJSONArray("content")
             ?.objects()
-            ?.filter { it.optString("type") == "text" }
-            ?.joinToString("\n") { it.optString("text") }
+            ?.filter { it.optStringOrEmpty("type") == "text" }
+            ?.joinToString("\n") { it.optStringOrEmpty("text") }
             .orEmpty()
     }
 
 internal fun extractEventTurnId(params: JSONObject): String? =
-    params.optString("turnId").takeIf { it.isNotBlank() }
-        ?: params.optJSONObject("turn")?.optString("id")?.takeIf { it.isNotBlank() }
-        ?: params.optString("turn_id").takeIf { it.isNotBlank() }
+    params.optNullableString("turnId")
+        ?: params.optJSONObject("turn")?.optNullableString("id")
+        ?: params.optNullableString("turn_id")
 
 internal fun formatCommandPromptText(commandObj: JSONObject?): String {
     if (commandObj == null) return ""
-    val base = commandObj.optString("text")
+    val base = commandObj.optNullableString("text").orEmpty()
     val attLabels =
         commandObj
             .optJSONArray("attachments")
             ?.objects()
-            ?.mapNotNull { it.optString("name").trim().takeIf { name -> name.isNotEmpty() } }
+            ?.mapNotNull { it.optNullableString("name")?.trim()?.takeIf { name -> name.isNotEmpty() } }
             ?.map { "[附件: $it]" }
             .orEmpty()
     if (attLabels.isEmpty()) return base
@@ -98,9 +102,15 @@ internal fun isRedactedPathOnly(value: String): Boolean =
     value.trim() == "[local_path_redacted]"
 
 internal sealed interface ConversationBlock {
-    data class Single(val item: TranscriptItem) : ConversationBlock
+    val displayKey: String
 
-    data class Tools(val items: List<TranscriptItem>) : ConversationBlock
+    data class Single(val item: TranscriptItem) : ConversationBlock {
+        override val displayKey: String get() = item.displayKey
+    }
+
+    data class Tools(val items: List<TranscriptItem>) : ConversationBlock {
+        override val displayKey: String get() = items.first().displayKey
+    }
 }
 
 internal fun groupTranscript(items: List<TranscriptItem>): List<ConversationBlock> {
@@ -133,6 +143,7 @@ internal class TranscriptFoldState(
     val positions = HashMap<String, Int>()
     val runningToolIds = LinkedHashSet<String>()
     val runningToolByCmd = HashMap<String, String>()
+    private val toolIdOccurrences = HashMap<String, Int>()
     val seenTurnIds = HashSet<String>()
     val promptedTurnIds = HashSet<String>()
     val trailingPromptIds = ArrayList<String>()
@@ -142,7 +153,7 @@ internal class TranscriptFoldState(
         val position = positions[item.id]
         if (position == null || position >= items.size) {
             positions[item.id] = items.size
-            items.add(item)
+            items.add(if (item.kind == TranscriptKind.TOOL) withNewToolDisplayKey(item) else item)
         } else {
             val previous = items[position]
             if (previous.kind == TranscriptKind.TOOL && previous.state == ToolState.RUNNING) {
@@ -151,7 +162,13 @@ internal class TranscriptFoldState(
                     if (runningToolByCmd[cmd] == previous.id) runningToolByCmd.remove(cmd)
                 }
             }
-            items[position] = item
+            items[position] =
+                when {
+                    item.kind != TranscriptKind.TOOL -> item
+                    previous.kind != TranscriptKind.TOOL -> withNewToolDisplayKey(item)
+                    item.displayKey == previous.displayKey -> item
+                    else -> item.copy(displayKey = previous.displayKey)
+                }
         }
         if (item.kind == TranscriptKind.TOOL) {
             if (item.state == ToolState.RUNNING) {
@@ -166,6 +183,13 @@ internal class TranscriptFoldState(
                 }
             }
         }
+    }
+
+    private fun withNewToolDisplayKey(item: TranscriptItem): TranscriptItem {
+        // A provisional ID can reappear after reconciliation frees it in the event index.
+        val occurrence = (toolIdOccurrences[item.id] ?: 0) + 1
+        toolIdOccurrences[item.id] = occurrence
+        return item.copy(displayKey = "tool:$occurrence:${item.id}")
     }
 
     fun stripTrailingPrompts() {
@@ -269,8 +293,8 @@ private fun collectPrompts(
         if (record.action != "send_prompt") continue
         if (record.hubSessionId.isNotBlank() && record.hubSessionId != hubSessionId) continue
         val receipt = record.receipt ?: continue
-        if (receipt.optString("status") != "accepted") continue
-        val turn = receipt.optJSONObject("result")?.optJSONObject("turn")?.optString("id").orEmpty()
+        if (receipt.optStringOrEmpty("status") != "accepted") continue
+        val turn = receipt.optJSONObject("result")?.optJSONObject("turn")?.optStringOrEmpty("id").orEmpty()
         val text = formatCommandPromptText(record.command.optJSONObject("command"))
         if (turn.isNotEmpty() && text.isNotBlank()) prompts[turn] = text
     }
@@ -312,8 +336,8 @@ private fun buildTranscriptState(
         }
 
         history.forEachIndexed { index, entry ->
-            val kind = entry.optString("kind")
-            val text = entry.optString("text").ifBlank { entry.optString("content") }
+            val kind = entry.optNullableString("kind").orEmpty()
+            val text = entry.optNullableString("text") ?: entry.optNullableString("content").orEmpty()
             val id = "history-$cursor-$index"
 
             if (kind == "thinking") {
@@ -330,7 +354,7 @@ private fun buildTranscriptState(
 
             if (
                 kind == "message" &&
-                entry.optString("role") != "user" &&
+                entry.optStringOrEmpty("role") != "user" &&
                 pendingThoughts.isNotEmpty() &&
                 !text.trimStart().startsWith("<think", ignoreCase = true)
             ) {
@@ -351,7 +375,7 @@ private fun buildTranscriptState(
             flushThoughts()
 
             val toolState =
-                when (entry.optString("status")) {
+                when (entry.optStringOrEmpty("status")) {
                     "running", "pending" -> ToolState.RUNNING
                     "failed" -> ToolState.FAILED
                     else -> ToolState.COMPLETED
@@ -364,7 +388,7 @@ private fun buildTranscriptState(
                             id = id,
                             kind = TranscriptKind.TOOL,
                             text = text,
-                            title = entry.optString("label").ifBlank { "工具调用" },
+                            title = entry.optNullableString("label") ?: "工具调用",
                             command = cmd,
                             output = out,
                             state = toolState,
@@ -376,14 +400,14 @@ private fun buildTranscriptState(
                             id = id,
                             kind = TranscriptKind.SYSTEM,
                             text = text,
-                            title = entry.optString("label").ifBlank { null },
+                            title = entry.optNullableString("label"),
                             history = true,
                         )
                     else ->
                         TranscriptItem(
                             id = id,
                             kind =
-                                if (entry.optString("role") == "user") TranscriptKind.USER
+                                if (entry.optStringOrEmpty("role") == "user") TranscriptKind.USER
                                 else TranscriptKind.ASSISTANT,
                             text = text,
                             history = true,
@@ -418,15 +442,15 @@ private fun appendUnansweredPrompts(
         if (record.hubSessionId.isNotBlank() && record.hubSessionId != hubSessionId) continue
         val receipt = record.receipt
         val acceptedTurnId =
-            if (receipt?.optString("status") == "accepted") {
-                receipt.optJSONObject("result")?.optJSONObject("turn")?.optString("id").orEmpty()
+            if (receipt?.optStringOrEmpty("status") == "accepted") {
+                receipt.optJSONObject("result")?.optJSONObject("turn")?.optStringOrEmpty("id").orEmpty()
             } else {
                 ""
             }
         if (receipt != null && (acceptedTurnId.isEmpty() || acceptedTurnId in fold.seenTurnIds)) {
             continue
         }
-        val clientId = record.command.optString("client_cmd_id")
+        val clientId = record.command.optStringOrEmpty("client_cmd_id")
         val id =
             if (acceptedTurnId.isNotEmpty()) "user:$acceptedTurnId"
             else if (clientId.isNotBlank()) "pending:$clientId"

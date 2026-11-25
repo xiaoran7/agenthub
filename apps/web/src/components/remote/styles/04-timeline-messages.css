@@ -1,0 +1,509 @@
+/* ================= 对话区：阅读栏宽 ================= */
+/* The column is a real reading measure, not the viewport. Everything below —
+   messages, tool cards, approvals, and the composer — shares one width so the
+   input lines up with the output it produces. The measure itself is declared
+   in remote-desktop.css with the rest of the palette tokens. */
+.remote-timeline {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
+  padding: 20px 32px;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(17, 24, 39, 0.2) transparent;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+}
+.remote-timeline::-webkit-scrollbar {
+  width: 5px;
+}
+.remote-timeline::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.2);
+}
+.remote-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 24, 39, 0.34);
+}
+[data-theme="dark"] .remote-timeline {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+[data-theme="dark"] .remote-timeline::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+[data-theme="dark"] .remote-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.remote-message {
+  margin: 0 auto 22px;
+  max-width: var(--remote-measure);
+  width: 100%;
+}
+/* The base rule is shared by both kinds; only the bubble differs. MarkdownView
+   handles wrapping, so the message itself must not pre-wrap its children. */
+.remote-message-body {
+  position: relative;
+  display: block;
+  width: 100%;
+  overflow-wrap: break-word;
+}
+/* A turn opener: a small provider dot plus name. It gives the reply an anchor
+   without boxing it, so a wall of prose still scans as discrete turns. */
+.remote-turn-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  color: var(--remote-muted, #a8a69e);
+}
+.remote-turn-tag small {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+.remote-turn-marker {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--remote-terracotta);
+  flex-shrink: 0;
+}
+.remote-msg-copy-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--remote-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+.remote-message.assistant:hover .remote-msg-copy-btn,
+.remote-msg-copy-btn:focus-visible,
+.remote-msg-copy-btn.copied {
+  opacity: 1;
+}
+@media (hover: none) {
+  .remote-msg-copy-btn {
+    opacity: 0.72;
+  }
+}
+.remote-msg-copy-btn:hover {
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+}
+.remote-msg-copy-btn.copied {
+  color: var(--remote-green);
+}
+/* Conversation loading skeleton */
+.remote-conversation-skeleton {
+  width: 100%;
+  max-width: var(--remote-measure, 760px);
+  margin: 12px auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 12px 4px;
+}
+.remote-conv-skel-user {
+  display: flex;
+  justify-content: flex-end;
+}
+.remote-conv-skel-bubble {
+  width: min(260px, 62%);
+  height: 40px;
+  border-radius: 16px 16px 4px 16px;
+  background: linear-gradient(
+    90deg,
+    var(--remote-hover) 25%,
+    var(--remote-line) 50%,
+    var(--remote-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: remote-skel-shimmer 1.5s ease-in-out infinite;
+}
+.remote-conv-skel-assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.remote-conv-skel-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-conv-skel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--remote-terracotta);
+  opacity: 0.55;
+}
+.remote-conv-skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.remote-conv-skel-bar {
+  height: 13px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--remote-hover) 25%,
+    var(--remote-line) 50%,
+    var(--remote-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: remote-skel-shimmer 1.5s ease-in-out infinite;
+}
+.remote-conv-skel-bar.w-20 {
+  width: 72px;
+  height: 10px;
+}
+.remote-conv-skel-bar.w-88 {
+  width: 88%;
+}
+.remote-conv-skel-bar.w-72 {
+  width: 72%;
+}
+.remote-conv-skel-bar.w-54 {
+  width: 54%;
+}
+.remote-conv-skel-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--remote-muted);
+}
+@keyframes remote-skel-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@keyframes message-fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.remote-message.user {
+  max-width: var(--remote-measure);
+  width: 100%;
+  margin: 0 auto 20px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  animation: message-fade-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.remote-message.user > .remote-message-body {
+  width: fit-content;
+  max-width: min(560px, 86%);
+  padding: 11px 16px;
+  border: 1px solid var(--remote-user-msg-border, var(--cds-border));
+  border-radius: 20px 20px 6px 20px;
+  background: var(--remote-user-msg-bg, var(--cds-bg-tint-blue));
+  color: var(--cds-text-primary, var(--remote-ink));
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+}
+.remote-message.user .remote-md-content {
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: left;
+}
+.remote-message.user .remote-md-content > *:first-child {
+  margin-top: 0;
+}
+.remote-message.user .remote-md-content > *:last-child {
+  margin-bottom: 0;
+}
+/* 会话流内实时执行状态条与错误卡片 */
+.remote-turn-live {
+  max-width: var(--remote-measure);
+  width: 100%;
+  margin: 2px auto 14px;
+  padding: 4px 2px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  animation: message-fade-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.remote-turn-live-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.remote-turn-live-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+  flex-shrink: 0;
+}
+.remote-turn-live-dots i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cds-clay, var(--remote-terracotta));
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  animation: remote-pulse 1.3s ease-in-out infinite;
+}
+.remote-turn-live-dots i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.remote-turn-live-dots i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+.remote-turn-live-label {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--cds-text-primary, var(--remote-ink));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-turn-live-provider {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--cds-text-muted, var(--remote-muted));
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--cds-border, var(--remote-line));
+  background: var(--cds-alpha-1, var(--remote-hover));
+  flex-shrink: 0;
+}
+.remote-timeline-error {
+  max-width: var(--remote-measure);
+  width: 100%;
+  margin: 0 auto 20px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(217, 83, 79, 0.35);
+  background: rgba(217, 83, 79, 0.08);
+  color: var(--remote-ink);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  animation: message-fade-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.remote-timeline-error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.remote-timeline-error-body strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--remote-red);
+}
+.remote-timeline-error-body span {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--remote-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.remote-timeline-error button[aria-label="关闭提示"] {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--remote-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.remote-message.assistant {
+  width: 100%;
+  max-width: var(--remote-measure);
+  box-sizing: border-box;
+  animation: message-fade-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* Code and tables align with the reading measure and scroll inside themselves,
+   never breaking the column symmetry. */
+.remote-message.assistant .remote-code-block,
+.remote-message.assistant .remote-md-table-wrapper {
+  max-width: 100%;
+}
+.remote-timeline-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin: auto;
+  width: 100%;
+  max-width: var(--remote-measure);
+  padding: 40px 24px;
+  animation: remote-view-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.remote-timeline-empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-xl, 16px);
+  background: var(--remote-surface, #ffffff);
+  border: 1px solid var(--remote-line, rgba(0, 0, 0, 0.08));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+  color: var(--remote-secondary, #78716c);
+  margin-bottom: 18px;
+}
+[data-theme="dark"] .remote-timeline-empty-glyph,
+:root[data-theme="dark"] .remote-timeline-empty-glyph {
+  background: var(--remote-surface, #1e1e1e);
+  border-color: var(--remote-line, rgba(255, 255, 255, 0.1));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.remote-timeline-empty-title {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--remote-ink);
+  margin: 0 0 10px;
+  letter-spacing: -0.015em;
+}
+.remote-timeline-empty-desc {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--remote-muted);
+  max-width: 440px;
+  margin: 0 auto;
+}
+.remote-typing-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.18em;
+  background-color: var(--remote-terracotta);
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(217, 119, 87, 0.45);
+  animation: remote-blink 0.9s infinite ease-in-out;
+}
+@keyframes remote-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+/* 乐观更新发送中微光脉冲与呼吸动效 */
+.remote-message.user.sending > .remote-message-body {
+  border-color: var(--remote-terracotta, #d97757) !important;
+  box-shadow:
+    0 0 0 1px rgba(217, 119, 87, 0.25),
+    0 2px 8px rgba(217, 119, 87, 0.12);
+  animation: remote-user-sending-breathe 2.4s ease-in-out infinite;
+}
+@keyframes remote-user-sending-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(217, 119, 87, 0.2),
+      0 2px 6px rgba(217, 119, 87, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(217, 119, 87, 0.45),
+      0 4px 14px rgba(217, 119, 87, 0.22);
+  }
+}
+.remote-sending-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--remote-terracotta, #d97757);
+  margin-top: 6px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+.remote-sending-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: remote-blink 1s infinite ease-in-out;
+}
+.remote-tool {
+  border: 1px solid var(--cds-border, var(--remote-line));
+  background: var(--cds-surface-2, var(--remote-surface));
+  border-radius: var(--cds-panel-radius, 10px);
+  margin: 0 auto 14px;
+  max-width: var(--remote-measure);
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  overflow: hidden;
+  box-shadow: var(--cds-panel-shadow, 0 1px 3px rgba(0, 0, 0, 0.05));
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.remote-tool:hover {
+  border-color: var(--cds-border-strong, var(--remote-line-strong));
+  box-shadow: var(--cds-panel-shadow-hover, 0 2px 8px rgba(0, 0, 0, 0.08));
+}
+.remote-tool-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  list-style: none;
+  transition: background 0.15s ease;
+}
+.remote-tool-summary::-webkit-details-marker {
+  display: none;
+}
+.remote-tool-summary:hover {
+  background: var(--remote-hover);
+}

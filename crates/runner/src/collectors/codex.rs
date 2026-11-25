@@ -3,7 +3,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::{Arc, OnceLock, RwLock},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use rusqlite::{Connection, OpenFlags};
@@ -85,6 +85,7 @@ pub fn collect_codex_local_threads_shared_from(
         program: program.clone(),
         source,
     })?;
+    let _ = connection.busy_timeout(Duration::from_millis(500));
     let columns = connection
         .prepare("PRAGMA table_info(threads)")
         .and_then(|mut statement| {
@@ -288,12 +289,16 @@ pub(crate) fn load_magpie_codex_stats() -> HashMap<String, (u64, u64, u64, u64)>
         files: JsonOptMap<HashMap<String, JsonOptMap<MagpieFileStats>>>,
     }
 
+    let Ok(file) = fs::File::open(&magpie_path) else {
+        return HashMap::new();
+    };
+    let Ok(parsed) =
+        serde_json::from_reader::<_, MagpieSessionsFile>(std::io::BufReader::new(file))
+    else {
+        return HashMap::new();
+    };
     let mut magpie_codex = HashMap::new();
-    if let Ok(file) = fs::File::open(&magpie_path)
-        && let Ok(parsed) =
-            serde_json::from_reader::<_, MagpieSessionsFile>(std::io::BufReader::new(file))
-        && let Some(files) = parsed.files.0
-    {
+    if let Some(files) = parsed.files.0 {
         for (k, v_wrap) in files {
             if !k.contains(".codex") {
                 continue;
@@ -371,20 +376,31 @@ pub(crate) fn load_codex_history_counts(hist_path: &Path) -> HashMap<String, u64
         return map.clone();
     }
 
-    let mut history_counts = HashMap::new();
-    if let Ok(hist_conn) = Connection::open_with_flags(
+    let Ok(hist_conn) = Connection::open_with_flags(
         hist_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) && let Ok(mut stmt) = hist_conn.prepare(
+    ) else {
+        return HashMap::new();
+    };
+    let _ = hist_conn.busy_timeout(Duration::from_millis(500));
+    let Ok(mut stmt) = hist_conn.prepare(
         "SELECT thread_id, COUNT(*) FROM thread_items WHERE item_type = 'agentMessage' GROUP BY thread_id",
-    ) && let Ok(rows) = stmt.query_map([], |row| {
+    ) else {
+        return HashMap::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
         let tid: String = row.get(0)?;
         let count: i64 = row.get(1)?;
         Ok((tid, count.max(0) as u64))
-    }) {
-        for (tid, count) in rows.flatten() {
-            history_counts.insert(tid, count);
-        }
+    }) else {
+        return HashMap::new();
+    };
+    let mut history_counts = HashMap::new();
+    for row in rows {
+        let Ok((tid, count)) = row else {
+            return HashMap::new();
+        };
+        history_counts.insert(tid, count);
     }
 
     if let Ok(mut guard) = cache.write() {
@@ -434,6 +450,12 @@ pub(crate) fn discover_codex_state_database() -> Result<Option<PathBuf>, Collect
     } else {
         return Ok(None);
     };
+    discover_codex_state_database_in(&root)
+}
+
+pub(crate) fn discover_codex_state_database_in(
+    root: &Path,
+) -> Result<Option<PathBuf>, CollectorError> {
     if !root.is_dir() {
         return Ok(None);
     }
@@ -460,5 +482,9 @@ pub(crate) fn discover_codex_state_database() -> Result<Option<PathBuf>, Collect
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
-    Ok(candidates.into_iter().next().map(|(_, path)| path))
+    if let Some((_, path)) = candidates.into_iter().next() {
+        return Ok(Some(path));
+    }
+    let legacy = root.join("state.sqlite");
+    Ok(legacy.is_file().then_some(legacy))
 }

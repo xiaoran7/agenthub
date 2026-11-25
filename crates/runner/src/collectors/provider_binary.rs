@@ -109,8 +109,11 @@ fn is_electron_antigravity_gui_binary(path: &Path) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
     if fname == "antigravity.exe" {
-        let p_lower = path.to_string_lossy().to_ascii_lowercase();
-        if p_lower.contains(r"programsntigravity") || p_lower.contains("programs/antigravity") {
+        let p_lower = path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .replace('\\', "/");
+        if p_lower.contains("programs/antigravity") {
             return true;
         }
     }
@@ -238,7 +241,7 @@ fn resolve_windows_codex_binary(binary: &Path) -> Option<PathBuf> {
         }
         let candidate = directory.join(format!("{}.exe", binary.display()));
         if executable_fallback.is_none() && candidate.is_file() {
-            executable_fallback = candidate.canonicalize().ok().or(Some(candidate));
+            executable_fallback = dunce::canonicalize(&candidate).ok().or(Some(candidate));
         }
     }
     executable_fallback
@@ -251,8 +254,7 @@ pub(crate) fn resolve_windows_codex_candidate(candidate: &Path) -> Option<PathBu
         .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
         && candidate.is_file()
     {
-        return candidate
-            .canonicalize()
+        return dunce::canonicalize(candidate)
             .ok()
             .or_else(|| Some(candidate.into()));
     }
@@ -296,7 +298,7 @@ pub(crate) fn resolve_windows_codex_candidate(candidate: &Path) -> Option<PathBu
             .join("codex.exe"),
     ] {
         if native.is_file() {
-            return native.canonicalize().ok().or(Some(native));
+            return dunce::canonicalize(&native).ok().or(Some(native));
         }
     }
     None

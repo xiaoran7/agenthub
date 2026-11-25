@@ -399,7 +399,12 @@ class MobileParityTest {
                                 "receipt",
                                 JSONObject()
                                     .put("status", "accepted")
-                                    .put("result", JSONObject().put("question_id", "q-99")),
+                                    .put(
+                                        "result",
+                                        JSONObject()
+                                            .put("question_id", "q-99")
+                                            .put("response_sent", true),
+                                    ),
                             ),
                     ),
             )
@@ -657,6 +662,10 @@ class MobileParityTest {
     fun `appearance theme defaults to system and rejected command receipts prune optimistic prompts`() {
         assertEquals(AppearanceTheme.SYSTEM, AppearanceTheme.fromWire(""))
         assertEquals(AppearanceTheme.SYSTEM, AppearanceTheme.fromWire("nonexistent"))
+        assertEquals(AppearanceTheme.FOREST_DARK, AppearanceTheme.fromWire("forest_dark"))
+        assertEquals(AppearanceTheme.MINT_LIGHT, AppearanceTheme.fromWire("mint_light"))
+        assertEquals(AppearanceTheme.FOREST_DARK, AppearanceTheme.SYSTEM.resolve(systemDark = true))
+        assertEquals(AppearanceTheme.MINT_LIGHT, AppearanceTheme.SYSTEM.resolve(systemDark = false))
 
         val rejectedCmd =
             RemoteCommandRecord(
@@ -665,7 +674,7 @@ class MobileParityTest {
                         .put("client_cmd_id", "cmd-err-1")
                         .put(
                             "command",
-                            JSONObject().put("action", "prompt").put("text", "坏消息"),
+                            JSONObject().put("action", "send_prompt").put("text", "坏消息"),
                         ),
                 receipt =
                     JSONObject()

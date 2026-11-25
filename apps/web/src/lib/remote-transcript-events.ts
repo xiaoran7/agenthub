@@ -2,7 +2,7 @@ import type {
   ConversationItem,
   RemoteCommandRecord,
   RemoteEvent,
-} from "./remote";
+} from "./remote-types";
 
 export interface ConversationFold {
   items: ConversationItem[];
@@ -32,6 +32,15 @@ export function mutableItem(
   const copy = { ...target };
   fold.frozen.delete(target);
   fold.byId.set(copy.id, copy);
+  for (const [key, item] of fold.byId) {
+    if (item === target) fold.byId.set(key, copy);
+  }
+  for (const [key, item] of fold.runningToolsByTurn) {
+    if (item === target) fold.runningToolsByTurn.set(key, copy);
+  }
+  for (const [key, item] of fold.runningToolsByCmd) {
+    if (item === target) fold.runningToolsByCmd.set(key, copy);
+  }
   const position = fold.items.indexOf(target);
   if (position >= 0) fold.items[position] = copy;
   return copy;
@@ -466,13 +475,13 @@ export function foldEventsInto(
         if (turnId && runningToolsByTurn.has(turnId)) {
           const candidate = runningToolsByTurn.get(turnId)!;
           if (!candidate.command || !cmd || candidate.command === cmd) {
-            target = candidate;
+            target = mutableItem(fold, candidate);
             items.set(id, target);
           }
         } else if (cmd && runningToolsByCmd.has(cmd)) {
           const candidate = runningToolsByCmd.get(cmd)!;
           if (!turnId || !candidate.turnId || candidate.turnId === turnId) {
-            target = candidate;
+            target = mutableItem(fold, candidate);
             items.set(id, target);
           }
         }

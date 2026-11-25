@@ -2,11 +2,6 @@ package com.agentplatform.mobile.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,17 +27,22 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,17 +74,19 @@ import org.json.JSONObject
 // AgentHub adaptive mobile & tablet shell
 // =========================================================================
 
-private const val DEST_SESSIONS = "sessions"
-private const val DEST_HOSTS = "hosts"
-private const val DEST_SETTINGS = "settings"
+internal const val DEST_SESSIONS = "sessions"
+internal const val DEST_HOSTS = "hosts"
+internal const val DEST_SETTINGS = "settings"
 
 @Composable
 fun AgentPlatformApp(controller: AppController) {
     val ui = controller.state
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
+    val sessionScreenState = key(ui.signedIn, ui.account?.userId) { rememberSaveableStateHolder() }
 
     var destination by rememberSaveable { mutableStateOf(DEST_SESSIONS) }
+    var hostsFromSettings by rememberSaveable { mutableStateOf(false) }
     var openSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
     var launchHostId by rememberSaveable { mutableStateOf<String?>(null) }
     var resumeDraft by rememberSaveable(stateSaver = ResumeDraftSaver) {
@@ -101,8 +103,11 @@ fun AgentPlatformApp(controller: AppController) {
         if (!refreshing) {
             scope.launch {
                 refreshing = true
-                controller.refresh()
-                refreshing = false
+                try {
+                    controller.refresh()
+                } finally {
+                    refreshing = false
+                }
             }
         }
     }
@@ -112,8 +117,11 @@ fun AgentPlatformApp(controller: AppController) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 refreshing = true
-                controller.refresh()
-                refreshing = false
+                try {
+                    controller.refresh()
+                } finally {
+                    refreshing = false
+                }
                 val waiting =
                     controller.state.snapshot.sessions.any {
                         it.online && it.binding.executionState.waiting
@@ -165,6 +173,20 @@ fun AgentPlatformApp(controller: AppController) {
             }
         }
 
+    val selectDestination: (String) -> Unit = {
+        destination = it
+        hostsFromSettings = false
+        openSessionKey = null
+        launchHostId = null
+        resumeDraft = null
+        controller.clearError()
+    }
+    val backFromDestination: () -> Unit = {
+        selectDestination(
+            if (destination == DEST_HOSTS && hostsFromSettings) DEST_SETTINGS else DEST_SESSIONS,
+        )
+    }
+
     BackHandler(enabled = openSessionKey != null || launchHostId != null || resumeDraft != null) {
         when {
             openSessionKey != null -> openSessionKey = null
@@ -173,12 +195,13 @@ fun AgentPlatformApp(controller: AppController) {
         }
     }
 
+    val attention = remember(ui.snapshot, ui.plugins) { buildAttentionQueue(ui.snapshot, ui.plugins.orEmpty()) }
     val destinations =
-        remember(ui.snapshot.waitingCount) {
+        remember(attention.size) {
             listOf(
-                BottomDestination(DEST_SESSIONS, "会话", badge = ui.snapshot.waitingCount),
-                BottomDestination(DEST_HOSTS, "电脑"),
-                BottomDestination(DEST_SETTINGS, "设置"),
+                NavigationDestination(DEST_SESSIONS, "会话", badge = attention.size),
+                NavigationDestination(DEST_HOSTS, "电脑"),
+                NavigationDestination(DEST_SETTINGS, "设置"),
             )
         }
 
@@ -280,36 +303,55 @@ fun AgentPlatformApp(controller: AppController) {
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
     ) {
         val useSideRail = maxWidth >= 720.dp
-        val showPrimaryNav =
-            ui.signedIn && (useSideRail || (openSessionKey == null && launchHostId == null && resumeDraft == null))
+        val drawerState = rememberDrawerState(DrawerValue.Closed)
+        val openNavigation: (() -> Unit)? =
+            if (useSideRail) null else ({ scope.launch { drawerState.open() } })
 
-        Row(Modifier.fillMaxSize()) {
-            if (useSideRail && showPrimaryNav) {
-                SideNavigationRail(
-                    destinations = destinations,
-                    current = destination,
-                    onSelect = {
-                        destination = it
-                        openSessionKey = null
-                        launchHostId = null
-                        resumeDraft = null
-                        controller.clearError()
-                    },
-                )
-            }
+        BackHandler(
+            enabled = ui.signedIn && !useSideRail && drawerState.isOpen,
+        ) {
+            scope.launch { drawerState.close() }
+        }
 
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        BackHandler(
+            enabled =
+                ui.signedIn && !useSideRail && !drawerState.isOpen &&
+                    (targetState == DEST_HOSTS || targetState == DEST_SETTINGS),
+            onBack = backFromDestination,
+        )
+
+        val screenContent: @Composable () -> Unit = {
+            Row(Modifier.fillMaxSize()) {
+                if (useSideRail && ui.signedIn) {
+                    SideNavigationRail(
+                        destinations = destinations,
+                        current = destination,
+                        onSelect = selectDestination,
+                    )
+                }
+
+                Box(
+                    Modifier.weight(1f).fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
                     AnimatedContent(
                         targetState = targetState,
                         transitionSpec = {
-                            fadeIn(tween(MotionTokens.Standard))
-                                .togetherWith(fadeOut(tween(MotionTokens.Quick)))
-                                .using(SizeTransform(clip = false))
+                            screenTransitionSpec(
+                                from = initialState,
+                                to = targetState,
+                                useSideRail = useSideRail,
+                            )
                         },
                         label = "screen",
                     ) { target ->
-                        when (target) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.background),
+                        ) {
+                            when (target) {
                             "gate" -> AuthGate(controller)
                             "session" -> {
                                 val client = controller.gateway
@@ -336,11 +378,13 @@ fun AgentPlatformApp(controller: AppController) {
                             "launch" -> {
                                 val hostId = launchHostId ?: resumeDraft?.runnerId
                                 val host = hostId?.let { ui.snapshot.host(it) }
+                                val availableHosts = ui.snapshot.hosts.filter { !it.revoked }
                                 if (host != null) {
                                     LaunchScreen(
                                         controller = controller,
-                                        host = host,
-                                        enabledPluginIds = ui.enabledPluginIds,
+                                        initialHost = host,
+                                        allHosts = availableHosts,
+                                        initialEngineWire = providerFilterWire,
                                         submitting = launching,
                                         error = ui.error,
                                         resumeFrom = resumeDraft,
@@ -348,12 +392,13 @@ fun AgentPlatformApp(controller: AppController) {
                                             launchHostId = null
                                             resumeDraft = null
                                         },
-                                        onLaunch = { command, hubId, firstPrompt, seed ->
+                                        onLaunch = { targetRunnerId, command, hubId, firstPrompt, seed ->
+                                            val targetHost = ui.snapshot.host(targetRunnerId) ?: host
                                             launching = true
                                             controller.dispatch(
-                                                runnerId = host.runnerId,
+                                                runnerId = targetHost.runnerId,
                                                 hubSessionId = hubId,
-                                                hostGeneration = host.hostGeneration.ifBlank { null },
+                                                hostGeneration = targetHost.hostGeneration.ifBlank { null },
                                                 action = command,
                                             ) { result ->
                                                 launching = false
@@ -362,7 +407,7 @@ fun AgentPlatformApp(controller: AppController) {
                                                         launchHostId = null
                                                         resumeDraft = null
                                                         seedTurn = seed.copy(firstPrompt = firstPrompt)
-                                                        openSessionKey = "${host.runnerId}/$hubId"
+                                                        openSessionKey = "${targetHost.runnerId}/$hubId"
                                                         scope.launch { controller.refresh() }
                                                     }
                                                     .onFailure {
@@ -384,41 +429,48 @@ fun AgentPlatformApp(controller: AppController) {
                                     contentAlignment = Alignment.TopCenter,
                                 ) {
                                     Box(Modifier.widthIn(max = 920.dp).fillMaxSize()) {
-                                        SessionsScreen(
-                                            snapshot = ui.snapshot,
-                                            enabledPluginIds = ui.enabledPluginIds,
-                                            loading = ui.loading && ui.snapshot === Snapshot.Empty,
-                                            refreshing = refreshing,
-                                            resumingKey = resumingCandidateKey,
-                                            resolvingApprovalId = resolvingApprovalId,
-                                            error = ui.error,
-                                            providerFilter =
-                                                providerFilterWire?.let { EngineKind.fromWire(it) },
-                                            onFilterChange = { providerFilterWire = it?.wire },
-                                            onOpenEntry = { entry ->
-                                                when (entry) {
-                                                    is TreeEntry.Active -> openSessionKey = entryKeyOf(entry)
-                                                    is TreeEntry.Candidate -> quickResumeCandidate(entry)
-                                                }
-                                                controller.clearError()
-                                            },
-                                            onConfigureResume = { entry ->
-                                                resumeDraft =
-                                                    ResumeDraft(
-                                                        runnerId = entry.runnerId,
-                                                        workspaceId = entry.workspaceId,
-                                                        providerSessionId = entry.providerSessionId,
-                                                    )
-                                                controller.clearError()
-                                            },
-                                            onResolveApproval = resolveInlineApproval,
-                                            onLaunchNew = { runnerId ->
-                                                launchHostId = runnerId
-                                                controller.clearError()
-                                            },
-                                            onOpenHost = { destination = DEST_HOSTS },
-                                            onRefresh = refreshNow,
-                                        )
+                                        sessionScreenState.SaveableStateProvider(DEST_SESSIONS) {
+                                            SessionsScreen(
+                                                snapshot = ui.snapshot,
+                                                attention = attention,
+                                                enabledPluginIds = ui.enabledPluginIds,
+                                                loading = ui.loading && ui.snapshot === Snapshot.Empty,
+                                                refreshing = refreshing,
+                                                resumingKey = resumingCandidateKey,
+                                                resolvingApprovalId = resolvingApprovalId,
+                                                error = ui.error,
+                                                providerFilter =
+                                                    providerFilterWire?.let { EngineKind.fromWire(it) },
+                                                onFilterChange = { providerFilterWire = it?.wire },
+                                                onOpenEntry = { entry ->
+                                                    when (entry) {
+                                                        is TreeEntry.Active -> {
+                                                            controller.clearError()
+                                                            openSessionKey = entryKeyOf(entry)
+                                                        }
+                                                        is TreeEntry.Candidate -> quickResumeCandidate(entry)
+                                                    }
+                                                },
+                                                onConfigureResume = { entry ->
+                                                    resumeDraft =
+                                                        ResumeDraft(
+                                                            runnerId = entry.runnerId,
+                                                            workspaceId = entry.workspaceId,
+                                                            providerSessionId = entry.providerSessionId,
+                                                        )
+                                                    controller.clearError()
+                                                },
+                                                onResolveApproval = resolveInlineApproval,
+                                                onLaunchNew = { runnerId ->
+                                                    launchHostId = runnerId
+                                                    controller.clearError()
+                                                },
+                                                onOpenHost = { selectDestination(DEST_HOSTS) },
+                                                onOpenNavigation = openNavigation,
+                                                onRefresh = refreshNow,
+                                                plugins = ui.plugins.orEmpty(),
+                                            )
+                                        }
                                     }
                                 }
                             DEST_HOSTS ->
@@ -435,6 +487,7 @@ fun AgentPlatformApp(controller: AppController) {
                                             onOpenSession = { key -> openSessionKey = key },
                                             onLaunch = { runnerId -> launchHostId = runnerId },
                                             onRefresh = refreshNow,
+                                            onBack = if (useSideRail) null else backFromDestination,
                                         )
                                     }
                                 }
@@ -449,23 +502,45 @@ fun AgentPlatformApp(controller: AppController) {
                                             account = ui.account,
                                             config = ui.config,
                                             appearance = ui.appearance,
+                                            onBack = if (useSideRail) null else backFromDestination,
+                                            onOpenHosts = {
+                                                selectDestination(DEST_HOSTS)
+                                                hostsFromSettings = true
+                                            },
                                         )
                                     }
                                 }
                         }
+                        }
                     }
                 }
-                if (!useSideRail && showPrimaryNav) {
-                    BottomBar(
-                        destinations = destinations,
-                        current = destination,
-                        onSelect = {
-                            destination = it
-                            controller.clearError()
-                        },
-                    )
-                }
             }
+        }
+
+        if (useSideRail || !ui.signedIn) {
+            screenContent()
+        } else {
+            val openDestination: (String) -> Unit = {
+                selectDestination(it)
+                scope.launch { drawerState.close() }
+            }
+            ModalNavigationDrawer(
+                drawerState = drawerState,
+                gesturesEnabled = drawerState.isOpen,
+                scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.22f),
+                drawerContent = {
+                    MobileNavigationSheet(
+                        drawerState = drawerState,
+                        width = (maxWidth * 0.85f).coerceAtMost(360.dp),
+                        current = destination,
+                        waitingCount = attention.size,
+                        deviceCount = ui.snapshot.hosts.count { !it.revoked },
+                        account = ui.account,
+                        onSelect = openDestination,
+                    )
+                },
+                content = screenContent,
+            )
         }
     }
 }

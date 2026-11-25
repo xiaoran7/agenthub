@@ -52,15 +52,6 @@ export interface LaunchAgentSpec {
   catalog: readonly string[];
 }
 
-export const LAUNCH_AGENTS: readonly LaunchAgentSpec[] = [
-  ...CORE_LAUNCH_AGENTS,
-];
-
-export const LAUNCH_AGENT_OPTIONS = LAUNCH_AGENTS.map((item) => ({
-  value: item.value,
-  label: item.label,
-}));
-
 export function formatSessionTokens(tokens?: number | null): string | null {
   if (tokens === null || tokens === undefined || tokens <= 0) return null;
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;

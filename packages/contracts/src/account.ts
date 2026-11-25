@@ -80,7 +80,15 @@ export function parseAvatarPayload(value: unknown): AvatarPayload | undefined {
 
 /** Decode a base64 string, in both Node and the browser. */
 function decodeBase64(value: string): Uint8Array {
-  const binary = atob(value);
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch {
+    throw new ContractError(
+      "invalid_avatar",
+      "avatar must contain valid base64 image data",
+    );
+  }
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);

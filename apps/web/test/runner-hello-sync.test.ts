@@ -347,3 +347,69 @@ test("mergeRunnerHelloEntries overlays full hello without mutating input rows", 
   assert.equal(merged[0]?.hello?.discovery?.candidates.length, 2);
   assert.equal(merged[0]?.hello?.device_name, "xiaotang");
 });
+
+test("mergeRunnerHelloEntries lets live thin hello fields override stale cached full hello", () => {
+  const cachedFull = makeHelloResponse("dev_a", "gen-1", 2).hello!;
+  cachedFull.device_name = "old-name";
+  cachedFull.workspaces = ["ws-old-0123456789abcdef"];
+  cachedFull.pending_approvals = [
+    {
+      approval_id: "stale-approval",
+      hub_session_id: "hub-1",
+      host_generation: "gen-1",
+      turn_id: "turn-1",
+      can_approve: true,
+      can_decline: true,
+    },
+  ];
+  cachedFull.models = { data: [{ id: "gpt-5.4" }] };
+
+  const liveThinRunner: RemoteRunner = {
+    runner_id: "dev_a",
+    online: true,
+    revoked: false,
+    hello: {
+      host_generation: "gen-2",
+      device_name: "live-workstation",
+      workspaces: ["ws-new-0123456789abcdef"],
+      pending_approvals: [],
+    },
+  };
+  const entries: Record<string, RunnerHelloEntry> = {
+    dev_a: {
+      status: "ready",
+      initialAttemptFinished: true,
+      hello: cachedFull,
+    },
+  };
+
+  const merged = mergeRunnerHelloEntries([liveThinRunner], entries);
+  assert.equal(merged[0]?.hello?.host_generation, "gen-2");
+  assert.equal(merged[0]?.hello?.device_name, "live-workstation");
+  assert.deepEqual(merged[0]?.hello?.workspaces, ["ws-new-0123456789abcdef"]);
+  assert.deepEqual(merged[0]?.hello?.pending_approvals, []);
+  // Heavy cached fields absent from the thin snapshot are still preserved.
+  assert.equal(merged[0]?.hello?.discovery?.candidates.length, 2);
+  assert.equal(merged[0]?.hello?.models?.data?.[0]?.id, "gpt-5.4");
+});
+
+test("mergeRunnerHelloEntries preserves null hello instead of resurrecting stale cache", () => {
+  const cachedFull = makeHelloResponse("dev_a", "gen-1", 2).hello!;
+  const offlineRunner: RemoteRunner = {
+    runner_id: "dev_a",
+    online: false,
+    revoked: false,
+    hello: null,
+  };
+  const entries: Record<string, RunnerHelloEntry> = {
+    dev_a: {
+      status: "ready",
+      initialAttemptFinished: true,
+      hello: cachedFull,
+    },
+  };
+
+  const merged = mergeRunnerHelloEntries([offlineRunner], entries);
+  assert.equal(merged[0], offlineRunner);
+  assert.equal(merged[0]?.hello, null);
+});

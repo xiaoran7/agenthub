@@ -46,12 +46,12 @@ impl RouteDiscoveryContext {
             claude_roots: gateway_search_roots(),
             cc_providers: discover_all_cc_switch_active_providers(),
             installed: InstalledAgentFlags {
-                claude_code: crate::web_server::device_info::find_executable(
+                claude_code: crate::device_name::find_executable(
                     "claude",
                     &["AppData/Roaming/npm/claude.cmd", ".local/bin/claude"],
                 )
                 .0,
-                codex: crate::web_server::device_info::find_executable(
+                codex: crate::device_name::find_executable(
                     "codex",
                     &["AppData/Roaming/npm/codex.cmd", ".local/bin/codex"],
                 )

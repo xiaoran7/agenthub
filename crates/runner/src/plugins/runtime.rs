@@ -12,6 +12,7 @@ use crate::collectors::AcpAppServer;
 use super::types::{InstalledPluginRecord, PluginManifest, validate_relative_path};
 
 const METADATA_CACHE_TTL: Duration = Duration::from_secs(10);
+const NEGATIVE_METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
 const PLUGIN_RPC_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Clone, Default)]
@@ -115,11 +116,15 @@ pub fn query_plugin_metadata(record: &InstalledPluginRecord) -> PluginMetadataSn
     if let Ok(guard) = metadata_cache().lock()
         && let Some((ver, snap)) = guard.get(&record.id)
         && *ver == cache_key_version
-        && snap
-            .fetched_at
-            .is_some_and(|at| at.elapsed() < METADATA_CACHE_TTL)
     {
-        return snap.clone();
+        let ttl = if snap.available == Some(false) && snap.error.is_some() {
+            NEGATIVE_METADATA_CACHE_TTL
+        } else {
+            METADATA_CACHE_TTL
+        };
+        if snap.fetched_at.is_some_and(|at| at.elapsed() < ttl) {
+            return snap.clone();
+        }
     }
 
     let mut snapshot = PluginMetadataSnapshot {
@@ -132,6 +137,9 @@ pub fn query_plugin_metadata(record: &InstalledPluginRecord) -> PluginMetadataSn
         Err(err) => {
             snapshot.available = Some(false);
             snapshot.error = Some(err);
+            if let Ok(mut guard) = metadata_cache().lock() {
+                guard.insert(record.id.clone(), (cache_key_version, snapshot.clone()));
+            }
             return snapshot;
         }
     };

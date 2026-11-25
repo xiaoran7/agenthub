@@ -100,6 +100,143 @@ pub fn project_display_name(raw_cwd: &str) -> String {
         .unwrap_or_else(|| "unknown-project".into())
 }
 
+/// Builds a human-readable, username-free display path for a workspace
+/// (e.g. `~/Desktop`, `D: ClaudeSpace/Project/Agent-Nexus`, `www/workspace/app`)
+/// that never exposes raw OS home usernames or triggers absolute-path redaction.
+pub fn workspace_display_path(raw_cwd: &str) -> String {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|v| v.to_string_lossy().into_owned());
+    workspace_display_path_with_home(raw_cwd, home.as_deref())
+}
+
+fn workspace_display_path_with_home(raw_cwd: &str, current_home: Option<&str>) -> String {
+    let mut cleaned = raw_cwd.trim().replace('\\', "/");
+    if let Some(rest) = cleaned.strip_prefix("//?/") {
+        cleaned = rest.to_owned();
+    }
+    let cleaned = cleaned.trim_end_matches('/');
+    if cleaned.is_empty() {
+        return project_display_name(raw_cwd);
+    }
+
+    let formatted = if let Some(home) = current_home {
+        let norm_home = home
+            .trim()
+            .replace('\\', "/")
+            .trim_start_matches("//?/")
+            .trim_end_matches('/')
+            .to_owned();
+        if !norm_home.is_empty() {
+            let cwd_lower = cleaned.to_lowercase();
+            let home_lower = norm_home.to_lowercase();
+            if cwd_lower == home_lower {
+                "~".to_owned()
+            } else if cwd_lower.starts_with(&format!("{home_lower}/")) {
+                format!("~/{}", &cleaned[norm_home.len() + 1..])
+            } else {
+                format_non_home_display_path(cleaned)
+            }
+        } else {
+            format_non_home_display_path(cleaned)
+        }
+    } else {
+        format_non_home_display_path(cleaned)
+    };
+
+    let compacted = compact_display_path(&formatted, 120);
+    if compacted.is_empty()
+        || is_absolute_filesystem_path(&compacted)
+        || contains_absolute_filesystem_path(&compacted)
+    {
+        project_display_name(raw_cwd)
+    } else {
+        compacted
+    }
+}
+
+fn format_non_home_display_path(cleaned: &str) -> String {
+    let segments: Vec<&str> = cleaned.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return "root".to_owned();
+    }
+    let bytes = cleaned.as_bytes();
+    // Collapse generic Windows `C:/Users/<name>/...` to `~/...` so usernames stay private.
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let drive = (bytes[0] as char).to_ascii_uppercase();
+        if segments.len() >= 3 && segments[1].eq_ignore_ascii_case("users") {
+            let tail = &segments[3..];
+            return if tail.is_empty() {
+                "~".to_owned()
+            } else {
+                format!("~/{}", tail.join("/"))
+            };
+        }
+        let tail = &segments[1..];
+        return if tail.is_empty() {
+            format!("{drive}:")
+        } else {
+            format!("{drive}: {}", tail.join("/"))
+        };
+    }
+    // Collapse generic Unix `/Users/<name>/...`, `/home/<name>/...`, `/root/...`.
+    if cleaned.starts_with('/') {
+        if segments.len() >= 2
+            && (segments[0].eq_ignore_ascii_case("users") || segments[0] == "home")
+        {
+            let tail = &segments[2..];
+            return if tail.is_empty() {
+                "~".to_owned()
+            } else {
+                format!("~/{}", tail.join("/"))
+            };
+        }
+        if segments[0] == "root" {
+            let tail = &segments[1..];
+            return if tail.is_empty() {
+                "~".to_owned()
+            } else {
+                format!("~/{}", tail.join("/"))
+            };
+        }
+        return segments.join("/");
+    }
+    segments.join("/")
+}
+
+fn compact_display_path(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+    let (prefix, body) = if let Some(rest) = value.strip_prefix("~/") {
+        ("~/…/", rest)
+    } else if value.len() >= 3
+        && value.as_bytes()[0].is_ascii_alphabetic()
+        && value.as_bytes()[1] == b':'
+        && value.as_bytes()[2] == b' '
+    {
+        (&value[..3], &value[3..])
+    } else {
+        ("…/", value)
+    };
+    let parts: Vec<&str> = body.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.len() <= 2 {
+        return value.chars().take(max_chars).collect();
+    }
+    let tail = parts[parts.len().saturating_sub(3)..].join("/");
+    let candidate = if prefix.ends_with("…/") {
+        format!("{prefix}{tail}")
+    } else {
+        format!("{prefix}…/{tail}")
+    };
+    if candidate.chars().count() <= max_chars {
+        candidate
+    } else {
+        let leaf = parts.last().copied().unwrap_or(value);
+        format!("…/{leaf}").chars().take(max_chars).collect()
+    }
+}
+
 fn is_single_level_unix_root(trimmed: &str) -> bool {
     matches!(
         trimmed,
@@ -246,13 +383,16 @@ pub fn redact_paths_inside_text(value: &str) -> String {
     let mut chars = value.char_indices().peekable();
     let mut token = String::new();
     while let Some((idx, character)) = chars.next() {
-        if (character == '"' || character == '\'') && !value[idx + 1..].is_empty() {
+        if (character == '"' || character == '\'' || character == '`')
+            && !value[idx + 1..].is_empty()
+        {
             // Check whether a matching closing quote frames an absolute path (including spaces).
             if let Some(close_rel) = value[idx + character.len_utf8()..].find(character) {
                 let inner_start = idx + character.len_utf8();
                 let inner_end = inner_start + close_rel;
                 let inner = &value[inner_start..inner_end];
-                if !inner.is_empty() && is_absolute_filesystem_path(inner) {
+                if !inner.is_empty() && !inner.contains('\n') && is_absolute_filesystem_path(inner)
+                {
                     push_token(&mut redacted, &mut token);
                     redacted.push(character);
                     redacted.push_str("[local_path_redacted]");
@@ -298,7 +438,7 @@ fn push_token(out: &mut String, token: &mut String) {
     }
     let leading = token
         .chars()
-        .take_while(|c| matches!(c, '(' | '[' | '"' | '\''))
+        .take_while(|c| matches!(c, '(' | '[' | '{' | '"' | '\'' | '`'))
         .count();
     let trailing = token
         .chars()
@@ -306,7 +446,7 @@ fn push_token(out: &mut String, token: &mut String) {
         .take_while(|c| {
             matches!(
                 c,
-                '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '"' | '\''
+                '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '`'
             )
         })
         .count();
@@ -341,14 +481,15 @@ fn contains_absolute_filesystem_path(value: &str) -> bool {
     {
         return true;
     }
-    for quote in ['"', '\''] {
+    for quote in ['"', '\'', '`'] {
         let mut rest = value;
         while let Some(start) = rest.find(quote) {
             let after = &rest[start + 1..];
             let Some(end) = after.find(quote) else {
                 break;
             };
-            if is_absolute_filesystem_path(&after[..end]) {
+            let inner = &after[..end];
+            if !inner.contains('\n') && is_absolute_filesystem_path(inner) {
                 return true;
             }
             rest = &after[end + 1..];
@@ -369,269 +510,5 @@ fn matches_home(trimmed_cwd: &str, home: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hides_full_path_and_keeps_project_name() {
-        let redactor = ProjectRedactor::new(b"device-secret").unwrap();
-        let project = redactor.redact(r"C:\Users\alice\source\payments-api");
-
-        assert_eq!(project.display_name, "payments-api");
-        assert_eq!(project.fingerprint.len(), 64);
-        assert!(!project.fingerprint.contains("alice"));
-    }
-
-    #[test]
-    fn fingerprints_are_stable_for_the_same_path() {
-        let redactor = ProjectRedactor::new(b"device-secret").unwrap();
-        assert_eq!(
-            redactor.redact("/work/app").fingerprint,
-            redactor.redact("/work/app").fingerprint
-        );
-    }
-
-    #[test]
-    fn home_directory_is_not_used_as_a_display_name() {
-        assert!(matches_home(r"C:\Users\alice", r"C:\Users\alice"));
-        #[cfg(windows)]
-        assert!(matches_home(r"C:\Users\Alice", r"c:/users/alice"));
-        assert!(!matches_home(r"C:\Users\alice\project", r"C:\Users\alice"));
-        assert!(!matches_home(r"C:\Users\alice", ""));
-    }
-
-    #[test]
-    fn workspace_id_is_stable_and_does_not_reveal_full_path() {
-        let ws1 = workspace_id_for_path(r"C:\Users\alice\code\my-app");
-        let ws2 = workspace_id_for_path(r"c:\users\alice\code\my-app\");
-        assert_eq!(ws1, ws2);
-        assert!(ws1.starts_with("ws-my-app-"));
-        assert!(!ws1.contains("alice"));
-        assert!(!ws1.contains("code"));
-    }
-
-    #[test]
-    fn redact_paths_inside_text_keeps_the_surrounding_explanation() {
-        // The real failure the remote console used to lose entirely: a provider
-        // error whose message names both the cause and a config file on disk.
-        let redacted = redact_paths_inside_text(
-            "The 'gpt-6-luna' model is not supported; check C:\\Users\\alice\\codex\\config.toml",
-        );
-        assert!(redacted.contains("gpt-6-luna"), "the cause must survive");
-        assert!(
-            redacted.contains("is not supported"),
-            "the wording must survive"
-        );
-        assert!(!redacted.contains("alice"));
-        assert!(!redacted.contains("config.toml"));
-        assert!(redacted.contains("[local_path_redacted]"));
-
-        // Trailing sentence punctuation must not defeat the match.
-        assert_eq!(
-            redact_paths_inside_text("failed to read /home/alice/.codex/auth.json."),
-            "failed to read [local_path_redacted]."
-        );
-        // A path in parentheses stays bounded by its own punctuation.
-        assert_eq!(
-            redact_paths_inside_text("see (C:\\Users\\alice\\app) for detail"),
-            "see ([local_path_redacted]) for detail"
-        );
-        // Two paths in one sentence are both rewritten.
-        assert_eq!(
-            redact_paths_inside_text("copy /home/alice/a to /home/alice/b"),
-            "copy [local_path_redacted] to [local_path_redacted]"
-        );
-        // A token made only of delimiters counts as both a leading and a trailing
-        // run, so the two overlap; it must not take the redaction down with it.
-        assert_eq!(
-            redact_paths_inside_text(r#"unexpected token " at C:\Users\alice\config"#),
-            r#"unexpected token " at [local_path_redacted]"#
-        );
-        assert_eq!(
-            redact_paths_inside_text(r#"see "" near C:\Users\alice\config"#),
-            r#"see "" near [local_path_redacted]"#
-        );
-    }
-
-    #[test]
-    fn redact_paths_inside_text_leaves_clean_text_untouched() {
-        for clean in [
-            "model is not supported",
-            "HTTP 429 too many requests",
-            "rate limit exceeded, retry later",
-            "",
-        ] {
-            assert_eq!(
-                redact_paths_inside_text(clean),
-                clean,
-                "text without an absolute path must not be redacted"
-            );
-        }
-    }
-
-    #[test]
-    fn sanitize_workspace_paths_in_json_replaces_cwd_and_nested_paths() {
-        let mut sample = serde_json::json!({
-            "type": "data",
-            "provider_response": {
-                "thread": {
-                    "id": "thread-1",
-                    "cwd": "C:\\Users\\alice\\projects\\super-app"
-                }
-            },
-            "events": [
-                {
-                    "raw": {
-                        "params": {
-                            "cwd": "/home/bob/secret-repo",
-                            "turn": {
-                                "id": "turn-1"
-                            }
-                        }
-                    },
-                    "binding": {
-                        "workspace_path": "D:\\Workspaces\\team-portal"
-                    }
-                }
-            ]
-        });
-        sanitize_workspace_paths_in_json(&mut sample);
-        let serialized = sample.to_string();
-        assert!(!serialized.contains("alice"));
-        assert!(!serialized.contains("bob"));
-        assert!(!serialized.contains("Users"));
-        assert!(!serialized.contains("home"));
-        assert!(!serialized.contains("D:\\\\Workspaces"));
-        assert_eq!(
-            sample["provider_response"]["thread"]["cwd"]
-                .as_str()
-                .unwrap(),
-            workspace_id_for_path("C:\\Users\\alice\\projects\\super-app")
-        );
-        assert_eq!(
-            sample["events"][0]["raw"]["params"]["cwd"]
-                .as_str()
-                .unwrap(),
-            workspace_id_for_path("/home/bob/secret-repo")
-        );
-        assert_eq!(
-            sample["events"][0]["binding"]["workspace_path"]
-                .as_str()
-                .unwrap(),
-            workspace_id_for_path("D:\\Workspaces\\team-portal")
-        );
-    }
-
-    #[test]
-    fn sanitize_workspace_paths_in_json_redacts_embedded_paths_and_credentials() {
-        let mut sample = serde_json::json!({
-            "command": "cat C:\\Users\\alice\\repo\\.env",
-            "stderr": "failed at /home/alice/private/config.json",
-            "url": "https://example.com/private/resource",
-            "Authorization": "Bearer usable-secret",
-            "access_token": "usable-token",
-            "environment": {"SAFE": "value"}
-        });
-
-        sanitize_workspace_paths_in_json(&mut sample);
-
-        assert_eq!(sample["command"], "cat [local_path_redacted]");
-        assert_eq!(sample["stderr"], "failed at [local_path_redacted]");
-        assert_eq!(sample["url"], "https://example.com/private/resource");
-        assert_eq!(sample["Authorization"], "[redacted]");
-        assert_eq!(sample["access_token"], "[redacted]");
-        assert_eq!(sample["environment"], "[redacted]");
-        let serialized = sample.to_string();
-        for forbidden in ["alice", "usable-secret", "usable-token"] {
-            assert!(!serialized.contains(forbidden));
-        }
-    }
-
-    #[test]
-    fn sanitize_workspace_paths_in_json_cleans_tool_events_and_arbitrary_paths() {
-        let mut sample = serde_json::json!({
-            "type": "event",
-            "event": {
-                "kind": "item/fileChange/requestApproval",
-                "raw": {
-                    "method": "item/fileChange/requestApproval",
-                    "params": {
-                        "filePath": "C:\\Users\\admin\\repo\\src\\main.rs",
-                        "diff": "--- a/src/main.rs\n+++ b/src/main.rs",
-                        "files": [
-                            "/Users/developer/code/backend/server.go",
-                            "D:\\Shared\\docs\\spec.pdf"
-                        ]
-                    }
-                }
-            }
-        });
-        sanitize_workspace_paths_in_json(&mut sample);
-        let serialized = sample.to_string();
-        assert!(!serialized.contains("admin"));
-        assert!(!serialized.contains("developer"));
-        assert!(!serialized.contains("C:\\\\Users"));
-        assert!(!serialized.contains("/Users/"));
-        assert!(!serialized.contains("D:\\\\Shared"));
-        assert_eq!(
-            sample["event"]["raw"]["params"]["filePath"]
-                .as_str()
-                .unwrap(),
-            workspace_id_for_path("C:\\Users\\admin\\repo\\src\\main.rs")
-        );
-        assert_eq!(
-            sample["event"]["raw"]["params"]["files"][0]
-                .as_str()
-                .unwrap(),
-            workspace_id_for_path("/Users/developer/code/backend/server.go")
-        );
-        assert_eq!(
-            sample["event"]["raw"]["params"]["files"][1]
-                .as_str()
-                .unwrap(),
-            workspace_id_for_path("D:\\Shared\\docs\\spec.pdf")
-        );
-    }
-
-    #[test]
-    fn sanitize_workspace_paths_in_json_preserves_full_sentences_with_embedded_paths() {
-        let mut sample = serde_json::json!({
-            "message": "Please review the code in /home/alice/project/src/lib.rs and tell me what you think.",
-            "actions": [
-                "run pytest in C:\\Users\\alice\\test",
-                "normal text without path"
-            ]
-        });
-        sanitize_workspace_paths_in_json(&mut sample);
-        assert_eq!(
-            sample["message"],
-            "Please review the code in [local_path_redacted] and tell me what you think."
-        );
-        assert_eq!(sample["actions"][0], "run pytest in [local_path_redacted]");
-        assert_eq!(sample["actions"][1], "normal text without path");
-    }
-
-    #[test]
-    fn redact_paths_inside_text_handles_equals_quotes_file_uri_single_level_and_unc() {
-        assert_eq!(
-            redact_paths_inside_text("--config=C:\\Users\\alice\\app.toml"),
-            "--config=[local_path_redacted]"
-        );
-        assert_eq!(
-            redact_paths_inside_text(r#"open "C:\Program Files\My App\secret.txt" failed"#),
-            r#"open "[local_path_redacted]" failed"#
-        );
-        assert_eq!(
-            redact_paths_inside_text("open file:///Users/alice/repo/src/main.rs now"),
-            "open [local_path_redacted] now"
-        );
-        assert_eq!(
-            redact_paths_inside_text("wrote /tmp and /etc"),
-            "wrote [local_path_redacted] and [local_path_redacted]"
-        );
-        assert_eq!(
-            redact_paths_inside_text(r"copy \\fileserver\team\secret.txt"),
-            "copy [local_path_redacted]"
-        );
-    }
-}
+#[path = "privacy_tests.rs"]
+mod tests;

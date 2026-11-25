@@ -24,6 +24,10 @@ use crate::{
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const STARTUP_IDLE_GRACE: Duration = Duration::from_secs(4);
+const MAX_DAEMON_TOOL_PAYLOAD_BYTES: usize = 65_536;
+const MAX_PREFLIGHT_RPC_RETRIES: usize = 3;
+const MAX_CONSECUTIVE_RPC_ERRORS: usize = 10;
+const MAX_IDLE_STALL_POLLS: usize = 8;
 
 pub struct DaemonTurnSpec<'a> {
     pub session_id: &'a str,
@@ -38,14 +42,21 @@ pub struct DaemonTurnSpec<'a> {
     pub events_queue: &'a Arc<Mutex<VecDeque<Value>>>,
 }
 
+fn bounded_tool_text(text: &str) -> String {
+    let mut out = text.to_owned();
+    crate::collectors::truncate_utf8_bytes(&mut out, MAX_DAEMON_TOOL_PAYLOAD_BYTES);
+    out
+}
+
 fn set_tool_item_input(item_json: &mut Value, item_type: &str, text: &str) {
+    let bounded = bounded_tool_text(text);
     match item_type {
-        "commandExecution" => item_json["command"] = json!(text),
+        "commandExecution" => item_json["command"] = json!(bounded),
         "fileChange" => {
-            item_json["diff"] = json!(text);
-            item_json["input"] = json!(text);
+            item_json["diff"] = json!(bounded);
+            item_json["input"] = json!(bounded);
         }
-        _ => item_json["input"] = json!(text),
+        _ => item_json["input"] = json!(bounded),
     }
 }
 
@@ -55,11 +66,47 @@ fn push_event(events_queue: &Arc<Mutex<VecDeque<Value>>>, evt: Value) {
     }
 }
 
-fn query_step_count_and_status(
+pub(crate) fn is_rpc_not_found(err: &CollectorError) -> bool {
+    match err {
+        CollectorError::Protocol { code, message, .. } => {
+            if code == "http_404" {
+                return true;
+            }
+            let lower = message.to_ascii_lowercase();
+            code == "http_400"
+                && (lower.contains("not_found")
+                    || lower.contains("not found")
+                    || lower.contains("does not exist"))
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn is_terminal_step_status(status: &str) -> bool {
+    let upper = status.to_ascii_uppercase();
+    upper.contains("DONE")
+        || upper.contains("ERROR")
+        || upper.contains("FAILED")
+        || upper.contains("CANCELED")
+        || upper.contains("CANCELLED")
+        || upper.contains("SKIPPED")
+        || upper.contains("ABORTED")
+}
+
+fn is_terminal_cascade_status(status_upper: &str) -> bool {
+    status_upper.contains("IDLE")
+        || status_upper.contains("DONE")
+        || status_upper.contains("ERROR")
+        || status_upper.contains("FAILED")
+        || status_upper.contains("CANCELED")
+        || status_upper.contains("CANCELLED")
+}
+
+pub(crate) fn query_step_count_and_status(
     ep: &AntigravityDaemonEndpoint,
     cascade_id: &str,
-) -> Option<(u64, String)> {
-    let val = call_daemon_rpc(
+) -> Result<Option<(u64, String)>, CollectorError> {
+    let val = match call_daemon_rpc(
         ep,
         "GetCascadeTrajectory",
         &json!({
@@ -67,9 +114,12 @@ fn query_step_count_and_status(
             "disableRehydration": false
         }),
         Duration::from_secs(4),
-    )
-    .ok()?;
-    let total = val
+    ) {
+        Ok(v) => v,
+        Err(err) if is_rpc_not_found(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let total_opt = val
         .get("numTotalSteps")
         .or_else(|| val.get("num_total_steps"))
         .and_then(Value::as_u64)
@@ -77,22 +127,26 @@ fn query_step_count_and_status(
             val.pointer("/trajectory/steps")
                 .and_then(Value::as_array)
                 .map(|a| a.len() as u64)
-        })
-        .unwrap_or(0);
-    let status = val
+        });
+    let status_opt = val
         .get("status")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    Some((total, status))
+        .filter(|s| !s.is_empty());
+    if total_opt.is_none() && status_opt.is_none() {
+        return Ok(None);
+    }
+    Ok(Some((
+        total_opt.unwrap_or(0),
+        status_opt.unwrap_or_default().to_owned(),
+    )))
 }
 
-fn fetch_steps_from(
+pub(crate) fn fetch_steps_from(
     ep: &AntigravityDaemonEndpoint,
     cascade_id: &str,
     step_offset: u64,
-) -> Vec<Value> {
-    call_daemon_rpc(
+) -> Result<Vec<Value>, CollectorError> {
+    let val = call_daemon_rpc(
         ep,
         "GetCascadeTrajectorySteps",
         &json!({
@@ -100,10 +154,12 @@ fn fetch_steps_from(
             "stepOffset": step_offset,
         }),
         Duration::from_secs(4),
-    )
-    .ok()
-    .and_then(|v| v.get("steps").and_then(Value::as_array).cloned())
-    .unwrap_or_default()
+    )?;
+    Ok(val
+        .get("steps")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
 }
 
 fn emit_step_events(
@@ -204,7 +260,7 @@ fn emit_step_events(
         }
     }
 
-    if !status.contains("DONE") && !status.contains("ERROR") && !status.contains("FAILED") {
+    if !is_terminal_step_status(status) {
         return;
     }
 
@@ -338,8 +394,16 @@ fn emit_step_events(
             .or_else(|| step.get("content"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let (clean_out, failed) = clean_antigravity_tool_output(raw_out);
-        let st_str = if failed || status.contains("ERROR") || status.contains("FAILED") {
+        let (mut clean_out, failed) = clean_antigravity_tool_output(raw_out);
+        crate::collectors::truncate_utf8_bytes(&mut clean_out, MAX_DAEMON_TOOL_PAYLOAD_BYTES);
+        let status_upper = status.to_ascii_uppercase();
+        let st_str = if failed
+            || status_upper.contains("ERROR")
+            || status_upper.contains("FAILED")
+            || status_upper.contains("CANCELED")
+            || status_upper.contains("CANCELLED")
+            || status_upper.contains("ABORTED")
+        {
             "failed"
         } else {
             "completed"
@@ -385,7 +449,36 @@ pub fn run_antigravity_daemon_turn(spec: DaemonTurnSpec<'_>) -> Result<String, C
     let existing_step_count = if spec.session_exists == Some(false) {
         None
     } else {
-        query_step_count_and_status(&ep, spec.raw_id).map(|(count, _)| count)
+        let mut queried = None;
+        let mut last_err = None;
+        for attempt in 0..MAX_PREFLIGHT_RPC_RETRIES {
+            if spec.cancel.load(Ordering::Relaxed) {
+                return Err(CollectorError::Cancelled {
+                    program: "antigravity-daemon".to_owned(),
+                });
+            }
+            match query_step_count_and_status(&ep, spec.raw_id) {
+                Ok(Some((count, _))) => {
+                    queried = Some(count);
+                    last_err = None;
+                    break;
+                }
+                Ok(None) => {
+                    last_err = None;
+                    break;
+                }
+                Err(err) => {
+                    last_err = Some(err);
+                    if attempt + 1 < MAX_PREFLIGHT_RPC_RETRIES {
+                        thread::sleep(Duration::from_millis(200));
+                    }
+                }
+            }
+        }
+        if let Some(err) = last_err {
+            return Err(err);
+        }
+        queried
     };
 
     let (real_raw_id, mut next_step) = match existing_step_count {
@@ -399,8 +492,12 @@ pub fn run_antigravity_daemon_turn(spec: DaemonTurnSpec<'_>) -> Result<String, C
     send_daemon_cascade_message(&ep, &real_raw_id, spec.text, spec.image_blocks, spec.model)?;
 
     let started_at = Instant::now();
-    let deadline = started_at + Duration::from_secs(600);
+    let turn_timeout = Duration::from_secs(600);
+    let deadline = started_at + turn_timeout;
     let mut saw_running_or_new_step = false;
+    let mut completed = false;
+    let mut consecutive_rpc_errors: usize = 0;
+    let mut idle_stall_polls: usize = 0;
     let mut pending_tool_ids: VecDeque<(String, String, Option<String>)> = VecDeque::new();
     let mut emitted_waiting: HashSet<u64> = HashSet::new();
 
@@ -412,10 +509,24 @@ pub fn run_antigravity_daemon_turn(spec: DaemonTurnSpec<'_>) -> Result<String, C
             });
         }
 
-        let steps = fetch_steps_from(&ep, &real_raw_id, next_step);
+        let steps = match fetch_steps_from(&ep, &real_raw_id, next_step) {
+            Ok(steps) => {
+                consecutive_rpc_errors = 0;
+                steps
+            }
+            Err(err) => {
+                consecutive_rpc_errors += 1;
+                if consecutive_rpc_errors >= MAX_CONSECUTIVE_RPC_ERRORS {
+                    return Err(err);
+                }
+                thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+        };
+        let base_step = next_step;
         let mut progressed_in_pass = false;
         for (offset, step) in steps.iter().enumerate() {
-            let idx = next_step + offset as u64;
+            let idx = base_step + offset as u64;
             let st = step
                 .get("status")
                 .and_then(Value::as_str)
@@ -430,7 +541,7 @@ pub fn run_antigravity_daemon_turn(spec: DaemonTurnSpec<'_>) -> Result<String, C
                 &mut emitted_waiting,
                 spec.events_queue,
             );
-            if st.contains("DONE") || st.contains("ERROR") || st.contains("FAILED") {
+            if is_terminal_step_status(st) {
                 if idx == next_step {
                     next_step += 1;
                     saw_running_or_new_step = true;
@@ -442,19 +553,61 @@ pub fn run_antigravity_daemon_turn(spec: DaemonTurnSpec<'_>) -> Result<String, C
             }
         }
 
-        if let Some((total_steps, status)) = query_step_count_and_status(&ep, &real_raw_id) {
-            let status_upper = status.to_ascii_uppercase();
-            if status_upper.contains("RUNNING") || status_upper.contains("WAITING") {
-                saw_running_or_new_step = true;
-            } else if total_steps <= next_step
-                && !progressed_in_pass
-                && (saw_running_or_new_step || started_at.elapsed() >= STARTUP_IDLE_GRACE)
-            {
-                break;
+        match query_step_count_and_status(&ep, &real_raw_id) {
+            Ok(Some((total_steps, status))) => {
+                consecutive_rpc_errors = 0;
+                let status_upper = status.to_ascii_uppercase();
+                if status_upper.contains("RUNNING") || status_upper.contains("WAITING") {
+                    saw_running_or_new_step = true;
+                    idle_stall_polls = 0;
+                } else if progressed_in_pass {
+                    idle_stall_polls = 0;
+                } else if total_steps <= next_step
+                    && (saw_running_or_new_step || started_at.elapsed() >= STARTUP_IDLE_GRACE)
+                {
+                    completed = true;
+                    break;
+                } else if is_terminal_cascade_status(&status_upper)
+                    && (saw_running_or_new_step || started_at.elapsed() >= STARTUP_IDLE_GRACE)
+                {
+                    idle_stall_polls += 1;
+                    if idle_stall_polls >= MAX_IDLE_STALL_POLLS {
+                        completed = true;
+                        break;
+                    }
+                } else {
+                    idle_stall_polls = 0;
+                }
+            }
+            Ok(None) => {
+                consecutive_rpc_errors = 0;
+                if !progressed_in_pass
+                    && (saw_running_or_new_step || started_at.elapsed() >= STARTUP_IDLE_GRACE)
+                {
+                    idle_stall_polls += 1;
+                    if idle_stall_polls >= MAX_IDLE_STALL_POLLS {
+                        completed = true;
+                        break;
+                    }
+                }
+            }
+            Err(err) => {
+                consecutive_rpc_errors += 1;
+                if consecutive_rpc_errors >= MAX_CONSECUTIVE_RPC_ERRORS {
+                    return Err(err);
+                }
             }
         }
 
         thread::sleep(POLL_INTERVAL);
+    }
+
+    if !completed {
+        let _ = cancel_daemon_cascade(&real_raw_id);
+        return Err(CollectorError::Timeout {
+            program: "antigravity-daemon".to_owned(),
+            timeout_ms: turn_timeout.as_millis(),
+        });
     }
 
     // Flush updated token/context usage from on-disk transcript if present

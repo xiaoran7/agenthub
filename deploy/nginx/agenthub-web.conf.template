@@ -6,13 +6,15 @@
 # 常驻内存从约 65MB 降到约 10MB，镜像从 1.51GB 降到约 100MB。
 #
 # 与旧实现逐条对齐：
-#   1. Cookie 白名单：只放行 agent_pulse_session / __Host-agent_pulse_session；
+#   1. Cookie 白名单：仅精确放行大小写敏感、43 位 base64url 的
+#      agent_pulse_session / __Host-agent_pulse_session；
 #   2. Authorization：配置 GATEWAY_ACCESS_TOKEN 时由服务端注入 Bearer，
 #      浏览器自带的 Authorization 一律丢弃，避免部署凭据被前端覆盖或外泄；
-#   3. X-User-Id：仅在未配置 Token 时透传（开发态身份注入）；
+#   3. X-User-Id 与 Forwarded：前门一律剥离客户端伪造值，防止开发态身份头或转发头走私；
 #   4. SSE：/v1/stream 与 /v3/remote/stream 关闭缓冲，首字节即时下发；
-#   5. 上游不可达：返回 502 {"error":"gateway_unreachable"}，与旧实现一致；
-#   6. /v3 下非 remote 前缀返回 404 JSON，与旧 /v3/[...path] 路由一致。
+#   5. 健康探针：/health 与 /healthz 透传至网关，保持统一请求头清洗语义；
+#   6. 上游不可达：返回 502 {"error":"gateway_unreachable"}，与旧实现一致；
+#   7. /v3 下非 remote 前缀返回 404 JSON，与旧 /v3/[...path] 路由一致。
 #
 # 注意：nginx 的 proxy_set_header 只在"当前层级没有定义任何 proxy_set_header"
 # 时才继承上一层。所以下面把全部请求头集中放在 server 层，location 里只放
@@ -22,12 +24,12 @@
 # 只放行两种会话 Cookie，其余（埋点、语言偏好等）一律不转给网关。
 map $http_cookie $agenthub_cookie_plain {
     default "";
-    "~*(^|;[ ]*)agent_pulse_session=([^;]+)" "agent_pulse_session=$2";
+    "~(?:^|;[ \t]*)agent_pulse_session=([A-Za-z0-9_-]{43})(?:;|$)" "agent_pulse_session=$1";
 }
 
 map $http_cookie $agenthub_cookie_host {
     default "";
-    "~*(^|;[ ]*)__Host-agent_pulse_session=([^;]+)" "__Host-agent_pulse_session=$2";
+    "~(?:^|;[ \t]*)__Host-agent_pulse_session=([A-Za-z0-9_-]{43})(?:;|$)" "__Host-agent_pulse_session=$1";
 }
 
 # 安全 Cookie（__Host-）存在时只转发 __Host-，防止相邻子域注入同名无前缀 Cookie 干扰或降级会话。
@@ -42,12 +44,6 @@ map $agenthub_cookie_host $agenthub_session_cookie {
 map "${GATEWAY_ACCESS_TOKEN}" $agenthub_authorization {
     default "";
     "~.+" "Bearer ${GATEWAY_ACCESS_TOKEN}";
-}
-
-# 配置了服务端 Token 时丢弃浏览器自带的开发态身份头，否则原样透传。
-map $agenthub_authorization $agenthub_identity {
-    default "$http_x_user_id";
-    "~.+" "";
 }
 
 # ---------- SSE 的 Accept ----------
@@ -74,8 +70,9 @@ map $http_x_forwarded_host $agenthub_forwarded_host {
 }
 
 server {
-    listen ${WEB_PORT};
+    listen ${WEB_HOST}:${WEB_PORT};
     server_name _;
+    server_tokens off;
 
     root ${WEB_ROOT};
     index index.html;
@@ -110,7 +107,9 @@ server {
     proxy_set_header Cookie $agenthub_session_cookie;
     # 空值表示整条 Authorization 头不下发，浏览器自带凭据无法覆盖服务端注入值。
     proxy_set_header Authorization $agenthub_authorization;
-    proxy_set_header X-User-Id $agenthub_identity;
+    # 生产与自托管前门一律剥离客户端 X-User-Id 与 Forwarded 头，杜绝开发态身份伪造与代理头走私。
+    proxy_set_header X-User-Id "";
+    proxy_set_header Forwarded "";
     proxy_set_header Accept $agenthub_accept;
     # 非 WebSocket 请求没有 Upgrade 头，这里会把它整条去掉。
     proxy_set_header Upgrade $http_upgrade;
@@ -131,19 +130,45 @@ server {
     location @payload_too_large {
         default_type application/json;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
         return 413 '{"error":"payload_too_large","message":"Request body exceeds gateway 12 MiB limit"}';
     }
 
     location @gateway_unreachable {
         default_type application/json;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
         return 502 '{"error":"gateway_unreachable"}';
+    }
+
+    # ---- 健康检查探针：透传至网关 ----
+    location = /health {
+        proxy_pass ${GATEWAY_ORIGIN};
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+    }
+
+    location = /healthz {
+        proxy_pass ${GATEWAY_ORIGIN};
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
     }
 
     # ---- 带内容哈希的构建产物：长期缓存 ----
     location ^~ /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
         add_header Referrer-Policy "no-referrer" always;
         try_files $uri =404;
     }
@@ -152,6 +177,7 @@ server {
     location = /theme-init.js {
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
         add_header Referrer-Policy "no-referrer" always;
         try_files $uri =404;
     }
@@ -159,6 +185,7 @@ server {
     location = /sw.js {
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
         add_header Referrer-Policy "no-referrer" always;
         try_files $uri =404;
     }
@@ -166,6 +193,7 @@ server {
     location = /manifest.webmanifest {
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
         add_header Referrer-Policy "no-referrer" always;
         try_files $uri =404;
     }
@@ -261,6 +289,8 @@ server {
     location ^~ /v3/ {
         default_type application/json;
         add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
         return 404 '{"error":"not_found"}';
     }
 

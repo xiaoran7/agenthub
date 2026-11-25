@@ -1,4 +1,3 @@
-#[cfg(test)]
 use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
@@ -141,12 +140,23 @@ pub(crate) struct UsageIndexDb {
 }
 
 impl UsageIndexDb {
+    /// Opens an existing `usage_index.db` strictly read-only without running DDL,
+    /// `BEGIN IMMEDIATE`, or `VACUUM`, avoiding write-lock contention during queries.
+    pub(crate) fn open_read_only(path: &Path) -> rusqlite::Result<Self> {
+        let connection = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(Duration::from_millis(3000))?;
+        Ok(Self { connection })
+    }
+
     pub(crate) fn open(path: &Path) -> rusqlite::Result<Self> {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         let connection = Connection::open(path)?;
-        connection.busy_timeout(Duration::from_millis(500))?;
+        connection.busy_timeout(Duration::from_millis(3000))?;
         connection.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -424,7 +434,7 @@ pub(crate) fn ensure_cold_manifest_loaded() {
     }
     let loaded = active_index_db_path()
         .filter(|p| p.is_file())
-        .and_then(|db_path| UsageIndexDb::open(&db_path).ok())
+        .and_then(|db_path| UsageIndexDb::open_read_only(&db_path).ok())
         .and_then(|db| db.load_manifest().ok());
 
     if let Ok(mut guard) = ledger_cache().write() {
@@ -488,6 +498,12 @@ fn collect_spill_for_source<'a, I>(
 /// Prunes stale in-memory `TranscriptState.index` hash maps and spills cold/excess
 /// immutable files into `usage_index.db` without holding `ledger_cache()` across SQLite I/O.
 pub(crate) fn compact_and_spill_cold() {
+    static SPILL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _spill_guard = SPILL_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
     let now_ms = now_epoch_ms();
     let db_path = active_index_db_path();
     let mut removals = Vec::new();
@@ -507,14 +523,23 @@ pub(crate) fn compact_and_spill_cold() {
             }
         }
         if db_path.is_some() {
-            removals = guard.dirty_db_removals.drain().collect();
+            // Keep paths in `dirty_db_removals` until SQLite deletion succeeds so
+            // concurrent cold queries never resurrect rows mid-delete.
+            removals = guard.dirty_db_removals.iter().cloned().collect();
             collect_spill_for_source(
                 "claude",
                 guard
                     .files
                     .iter()
                     .filter(|(_, s)| !s.cold_archived)
-                    .map(|(p, s)| (p, s.offset, s.modified_ms, s.calls.as_slice())),
+                    .map(|(p, s)| {
+                        (
+                            p,
+                            s.seen_len.max(s.offset),
+                            s.modified_ms,
+                            s.calls.as_slice(),
+                        )
+                    }),
                 &guard.cold_manifest,
                 now_ms,
                 &mut spill_batch,
@@ -560,7 +585,16 @@ pub(crate) fn compact_and_spill_cold() {
     let Ok(mut db) = UsageIndexDb::open(&db_path) else {
         return;
     };
-    let _ = db.remove_paths(&removals);
+    if !removals.is_empty() {
+        if db.remove_paths(&removals).is_err() {
+            return;
+        }
+        if let Ok(mut guard) = ledger_cache().write() {
+            for path in &removals {
+                guard.dirty_db_removals.remove(path);
+            }
+        }
+    }
     if db.upsert_files(&spill_batch).is_err() {
         return;
     }
@@ -572,7 +606,7 @@ pub(crate) fn compact_and_spill_cold() {
             match item.source {
                 "claude" => {
                     if let Some(state) = guard.files.get_mut(&item.path)
-                        && state.offset == item.file_len
+                        && state.seen_len.max(state.offset) == item.file_len
                         && state.modified_ms == item.modified_ms
                     {
                         state.cold_archived = true;
