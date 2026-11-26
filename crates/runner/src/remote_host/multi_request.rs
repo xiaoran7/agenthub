@@ -6,6 +6,7 @@ impl MultiProviderTransport {
         method: &str,
         params: Value,
     ) -> Result<Value, NativeError> {
+        self.wait_for_codex_boot();
         let req_thread_id = params
             .get("threadId")
             .and_then(Value::as_str)
@@ -210,6 +211,7 @@ impl MultiProviderTransport {
                 }))
             }
             "thread/list" => {
+                self.wait_for_codex_boot();
                 let is_first_page = params
                     .get("cursor")
                     .is_none_or(|c| c.is_null() || c.as_str().is_none_or(|s| s.is_empty()));
@@ -276,6 +278,7 @@ impl MultiProviderTransport {
                 Ok(response)
             }
             "model/list" => {
+                self.wait_for_codex_boot();
                 if let Some((cached_at, ref cached)) = self.codex_models_cache
                     && cached_at.elapsed() < Duration::from_secs(30)
                 {

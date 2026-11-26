@@ -96,6 +96,12 @@ pub(crate) fn host_label_from_url(url: &str) -> Option<String> {
 /// Verifies that local loopback (`80ms`) and Tailnet/private LAN (`300ms`) endpoints are
 /// accepting TCP connections before injecting them or issuing HTTP probes.
 /// Public WAN endpoints return `true` immediately without blocking on WAN latency.
+#[cfg(not(test))]
+static GATEWAY_REACHABILITY_CACHE: std::sync::OnceLock<RwLock<HashMap<String, (Instant, bool)>>> =
+    std::sync::OnceLock::new();
+#[cfg(not(test))]
+const GATEWAY_REACHABILITY_TTL: Duration = Duration::from_secs(30);
+
 pub(crate) fn is_gateway_url_reachable(url: &str) -> bool {
     let Some((host, port)) = parse_url_host_port(url) else {
         return false;
@@ -112,19 +118,41 @@ pub(crate) fn is_gateway_url_reachable(url: &str) -> bool {
     } else {
         format!("{host}:{port}")
     };
+    #[cfg(not(test))]
+    {
+        let cache = GATEWAY_REACHABILITY_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+        if let Ok(guard) = cache.read()
+            && let Some((checked_at, reachable)) = guard.get(&addr_str)
+            && checked_at.elapsed() < GATEWAY_REACHABILITY_TTL
+        {
+            return *reachable;
+        }
+    }
+    let mut reachable = false;
     if let Ok(addrs) = addr_str.to_socket_addrs() {
         for addr in addrs {
             if TcpStream::connect_timeout(&addr, timeout).is_ok() {
-                return true;
+                reachable = true;
+                break;
             }
         }
     } else if let Ok(ip) = host.parse::<IpAddr>() {
         let sock = SocketAddr::new(ip, port);
         if TcpStream::connect_timeout(&sock, timeout).is_ok() {
-            return true;
+            reachable = true;
         }
     }
-    false
+    #[cfg(not(test))]
+    {
+        let cache = GATEWAY_REACHABILITY_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+        if let Ok(mut guard) = cache.write() {
+            if guard.len() >= 64 {
+                guard.retain(|_, (checked_at, _)| checked_at.elapsed() < GATEWAY_REACHABILITY_TTL);
+            }
+            guard.insert(addr_str, (Instant::now(), reachable));
+        }
+    }
+    reachable
 }
 
 /// Dynamically queries live models from an upstream OpenAI/Anthropic compatible gateway.

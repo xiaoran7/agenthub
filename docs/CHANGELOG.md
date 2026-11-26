@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.10] - 2026-11-26
+
+- **Runner 冷启动秒连优化与服务端零闪烁引导合并（`crates/runner/`, `services/api/`）**：
+  - **非阻塞冷启动建链**：`MultiProviderTransport::with_async_codex` 将交互式 `CodexAppServer` 进程启动移至后台线程（收到 Codex 指令时按需等待，事件循环零阻塞）；`remote_runner.rs` 跳过主线程同步 `models()` 与 `discover()` 阻塞，启动后立即入队轻量引导 `ready` 帧并拉起远端 WebSocket 建链，同时并行触发 `CatalogWorker` 后台全量扫描（并允许在无 Codex 环境下继续完成 Claude/Antigravity/插件发现）。
+  - **失效内网网关探测缓存**：为 `claude_gateway::is_gateway_url_reachable` 增加 30 秒 TTL 缓存，避免历史失效私网/Tailnet 端口（如已退役的 `8317`）在启动探测期重复消耗 TCP 连接超时。
+  - **服务端引导帧零闪烁合并**：`services/api/src/remote-store-ingest.ts` 在接收 `models`/`discovery` 为空的快速引导 `ready` 帧时，立即更新 `host_generation` 并沿用上一次已知的 `models`、`discovery`、`workspaces` 与 `workspace_labels`（同时同步写入内存 `runnerHelloCache`），待后台全量扫描到达后再无缝替换，避免重启瞬间移动端会话与目录列表闪空；新增 Rust 与 API 回归单测。
+
 ## [2.8.9] - 2026-11-25
 
 - **Android 移动端全量体验与视觉打磨 + 跨端工作区路径语义化（`crates/runner/`, `packages/contracts/`, `services/api/`, `apps/web/`, `apps/android/`）**：

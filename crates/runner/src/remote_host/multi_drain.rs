@@ -5,6 +5,7 @@ impl MultiProviderTransport {
         let mut messages: Vec<Value> = Vec::new();
         let mut codex_lost = false;
 
+        self.poll_codex_boot();
         while let Some(evt) = self.codex_buffered_events.pop_front() {
             messages.push(evt);
         }

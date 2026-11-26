@@ -72,6 +72,7 @@ export function receiveRemoteFrame(
   ctx.register(owner, runner);
   let committedCount: number | undefined;
   let helloMutated = false;
+  let storedHello: Record<string, unknown> | null = null;
   let pluginsMutated = false;
   try {
     const receivedWatermark = ctx.transaction(() => {
@@ -210,11 +211,18 @@ export function receiveRemoteFrame(
             updates.push(session);
           }
           ctx.writeBindings(owner, runner, updates);
+          const existingHello = loadExistingRunnerHello(ctx, owner, runner);
+          const mergedHello = mergeBootstrapReadyHello(payload, existingHello);
+          storedHello = mergedHello;
           ctx
             .stmt(
               "UPDATE remote_runners SET hello=?, device_name=COALESCE(?, device_name) WHERE runner=?",
             )
-            .run(JSON.stringify(payload), ready.device_name ?? null, runner);
+            .run(
+              JSON.stringify(mergedHello),
+              ready.device_name ?? null,
+              runner,
+            );
           if ("plugins" in payload) {
             upsertRunnerPluginsRow(
               (sql) => ctx.stmt(sql),
@@ -300,10 +308,11 @@ export function receiveRemoteFrame(
       ctx.runnerEventCounts.set(runner, committedCount);
     }
     if (helloMutated) {
+      const helloToCache = storedHello ?? payload;
       ctx.cacheRunnerHello(runner, {
         owner,
-        full: payload,
-        thin: projectRunnerHello(payload),
+        full: helloToCache,
+        thin: projectRunnerHello(helloToCache),
       });
     }
     if (pluginsMutated) {
@@ -407,4 +416,78 @@ export function findRemoteResumePoint(
     }
   }
   return { transcript, approvals };
+}
+
+function loadExistingRunnerHello(
+  ctx: RemoteIngestContext,
+  owner: string,
+  runner: string,
+): Record<string, unknown> | null {
+  const cached = ctx.runnerHelloCache.get(runner);
+  if (cached && cached.owner === owner) return cached.full;
+  const row = ctx
+    .stmt("SELECT hello FROM remote_runners WHERE runner=? AND owner=?")
+    .get(runner, owner) as { hello: string | null } | undefined;
+  if (!row?.hello) return null;
+  try {
+    const parsed = JSON.parse(String(row.hello)) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When a freshly booted Runner publishes a fast bootstrap `ready` frame before
+ * its background `CatalogWorker` finishes scanning models and local sessions,
+ * `models` and/or `discovery` are `null`. Preserve the previous known snapshot
+ * for those fields so mobile/web clients see the Runner online in <1s without
+ * flickering out the session list or workspace labels until the full scan lands.
+ */
+function mergeBootstrapReadyHello(
+  incoming: Record<string, unknown>,
+  previous: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (!previous) return incoming;
+  const merged: Record<string, unknown> = { ...incoming };
+  if (merged.models == null && previous.models != null) {
+    merged.models = previous.models;
+  }
+  if (merged.discovery == null && previous.discovery != null) {
+    merged.discovery = previous.discovery;
+    if (Array.isArray(previous.workspaces)) {
+      const nextWs = Array.isArray(merged.workspaces)
+        ? [...(merged.workspaces as unknown[])]
+        : [];
+      const seen = new Set(
+        nextWs.filter((w): w is string => typeof w === "string"),
+      );
+      for (const ws of previous.workspaces) {
+        if (typeof ws === "string" && !seen.has(ws)) {
+          seen.add(ws);
+          nextWs.push(ws);
+        }
+      }
+      merged.workspaces = nextWs;
+    }
+    if (
+      previous.workspace_labels &&
+      typeof previous.workspace_labels === "object" &&
+      !Array.isArray(previous.workspace_labels)
+    ) {
+      const nextLabels =
+        merged.workspace_labels &&
+        typeof merged.workspace_labels === "object" &&
+        !Array.isArray(merged.workspace_labels)
+          ? (merged.workspace_labels as Record<string, unknown>)
+          : {};
+      merged.workspace_labels = {
+        ...(previous.workspace_labels as Record<string, unknown>),
+        ...nextLabels,
+      };
+    }
+  }
+  return merged;
 }

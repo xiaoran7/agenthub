@@ -877,3 +877,41 @@ fn handshake_receive_enforces_deadline_despite_continuous_ping_frames() {
     );
     let _ = server.join();
 }
+
+#[test]
+fn async_codex_boot_returns_immediately_and_catalog_tolerates_missing_codex() {
+    let started = Instant::now();
+    let mut transport = crate::remote_host::MultiProviderTransport::with_async_codex(
+        PathBuf::from("nonexistent-codex-binary-for-fast-boot-test"),
+        Duration::from_secs(2),
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "with_async_codex must not block startup"
+    );
+    transport.wait_for_codex_boot();
+    assert!(transport.codex.is_none());
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut catalog = CatalogWorker::new(
+        Some(PathBuf::from("nonexistent-codex-binary-for-fast-boot-test")),
+        vec![dir.path().to_path_buf()],
+    );
+    assert!(catalog.request());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let snapshot = loop {
+        if let Some(snap) = catalog.take_result() {
+            break snap;
+        }
+        assert!(Instant::now() < deadline, "catalog worker did not finish");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        snapshot.models.is_ok(),
+        "models should still load without codex"
+    );
+    assert!(
+        snapshot.discovery.is_ok(),
+        "discovery should still load without codex"
+    );
+}

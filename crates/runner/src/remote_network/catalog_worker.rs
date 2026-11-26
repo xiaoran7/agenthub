@@ -34,9 +34,7 @@ impl CatalogWorker {
             let read = || -> Result<_, String> {
                 let codex = binary
                     .as_ref()
-                    .map(|path| CodexAppServer::start_catalog(path, CATALOG_RPC_TIMEOUT))
-                    .transpose()
-                    .map_err(|_| "catalog_provider_unavailable".to_owned())?;
+                    .and_then(|path| CodexAppServer::start_catalog(path, CATALOG_RPC_TIMEOUT).ok());
                 NativeSessionHost::new(MultiProviderTransport::new(codex), workspaces.clone())
                     .map_err(|error| error.code)
             };

@@ -142,6 +142,7 @@ impl<K: Clone + Eq + std::hash::Hash> BoundedSet<K> {
 
 pub struct MultiProviderTransport {
     pub(crate) codex: Option<CodexAppServer>,
+    pub(crate) codex_boot: Option<std::sync::mpsc::Receiver<Option<CodexAppServer>>>,
     pub(crate) codex_models_cache: Option<(Instant, Value)>,
     pub(crate) codex_active_turns: HashMap<String, String>,
     pub(crate) codex_pending_requests: HashMap<String, (String, Value)>,
@@ -182,6 +183,7 @@ impl MultiProviderTransport {
     pub fn new(codex: Option<CodexAppServer>) -> Self {
         Self {
             codex,
+            codex_boot: None,
             codex_models_cache: None,
             codex_active_turns: HashMap::new(),
             codex_pending_requests: HashMap::new(),
@@ -216,6 +218,54 @@ impl MultiProviderTransport {
             acp_cached_cwds: BoundedMap::new(MAX_TRANSPORT_SESSION_CACHE),
             #[cfg(test)]
             skip_antigravity_daemon: false,
+        }
+    }
+
+    /// Constructs a transport immediately while starting the interactive Codex
+    /// app-server on a background thread so remote WS registration never waits
+    /// on a cold Node/Codex child process launch.
+    pub fn with_async_codex(binary: PathBuf, timeout: Duration) -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("agenthub-codex-boot".into())
+            .spawn(move || {
+                let codex = CodexAppServer::start_interactive(&binary, timeout).ok();
+                let _ = tx.send(codex);
+            });
+        let mut transport = Self::new(None);
+        if spawned.is_ok() {
+            transport.codex_boot = Some(rx);
+        }
+        transport
+    }
+
+    pub(crate) fn poll_codex_boot(&mut self) {
+        let Some(ref rx) = self.codex_boot else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(codex) => {
+                if self.codex.is_none() {
+                    self.codex = codex;
+                }
+                self.codex_boot = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.codex_boot = None;
+            }
+        }
+    }
+
+    pub(crate) fn wait_for_codex_boot(&mut self) {
+        if self.codex.is_some() {
+            self.codex_boot = None;
+            return;
+        }
+        if let Some(rx) = self.codex_boot.take() {
+            if let Ok(codex) = rx.recv() {
+                self.codex = codex;
+            }
         }
     }
 
@@ -543,6 +593,7 @@ impl MultiProviderTransport {
             self.acp_pending_requests.remove(&actual_id);
             return Ok(());
         }
+        self.poll_codex_boot();
         if let Some(ref mut codex) = self.codex {
             let req_key = id.to_string();
             match codex.respond(id, result) {

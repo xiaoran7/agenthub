@@ -197,45 +197,25 @@ pub fn run_with_local_control(
             effective_workspaces.push(cwd);
         }
     }
-    let (codex, claude, antigravity) = thread::scope(|s| {
-        let codex_handle =
-            s.spawn(|| CodexAppServer::start_interactive(&binary, PROVIDER_RESPONSE_TIMEOUT).ok());
-        let claude = crate::collectors::discover_claude_binary();
-        let antigravity = crate::collectors::discover_antigravity_binary();
-        let codex = codex_handle.join().ok().flatten();
-        (codex, claude, antigravity)
-    });
-    if codex.is_none()
-        && !claude.exists()
-        && !antigravity.exists()
-        && crate::plugins::list_installed_enabled().is_empty()
-        && url.is_some()
-    {
-        eprintln!(
-            "[Runner] No local native CLI or enabled ACP plugin found yet; continuing online so plugins can be installed remotely."
-        );
-    }
-    let catalog_binary = codex.is_some().then_some(binary);
-    let native = crate::remote_host::MultiProviderTransport::new(codex);
+    // Start the interactive Codex child and initial catalog/session discovery
+    // asynchronously so the remote WebSocket connects within ~1 s of launch
+    // instead of blocking up to ~10-30 s on cold provider/disk probes.
+    let native = crate::remote_host::MultiProviderTransport::with_async_codex(
+        binary.clone(),
+        PROVIDER_RESPONSE_TIMEOUT,
+    );
     let host = NativeSessionHost::new(native, effective_workspaces)
         .map_err(|error| anyhow::anyhow!(error.code))?;
     let mut durable = DurableHost::new(host, journal)?;
-    let mut catalog = CatalogWorker::new(catalog_binary, durable.host.workspaces().to_vec());
-    let (mut cached_models, mut cached_discovery) = if url.is_some() {
-        (
-            durable.host.models().ok(),
-            sanitize_remote_discovery(durable.host.discover().ok()),
-        )
-    } else {
-        (None, None)
-    };
-    // The last discovery actually published to the Gateway. A refresh that
-    // finds the same sessions must not enqueue another full snapshot.
-    let mut published_discovery = cached_discovery
-        .as_ref()
-        .map(crate::collectors::json_sha256);
-    let mut published_structural = structural_discovery_fingerprint(cached_discovery.as_ref());
-    let mut published_models = cached_models.as_ref().map(crate::collectors::json_sha256);
+    let mut catalog = CatalogWorker::new(Some(binary), durable.host.workspaces().to_vec());
+    let mut cached_models: Option<Value> = None;
+    let mut cached_discovery: Option<Value> = None;
+    // The last discovery actually published to the Gateway. Starting at `None`
+    // guarantees the first background `CatalogWorker` result immediately
+    // publishes the full models + discovery + workspace_labels snapshot.
+    let mut published_discovery: Option<[u8; 32]> = None;
+    let mut published_structural: Option<[u8; 32]> = None;
+    let mut published_models: Option<[u8; 32]> = None;
     let mut last_ready_publish = Instant::now();
     // The label last published in the `ready` frame, so a rename is detected
     // even when the session list is unchanged.
@@ -264,7 +244,7 @@ pub fn run_with_local_control(
     let worker_stop = control.clone();
     let worker_seq = command_seq.clone();
     let mut current_server = url.clone();
-    let mut refresh_requested = false;
+    let mut refresh_requested = url.is_some();
     if let Some(target_url) = url {
         let events_tx_clone = events_tx.clone();
         let worker_remote_generation = remote_generation.clone();
